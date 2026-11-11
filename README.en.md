@@ -2,9 +2,9 @@
 
 [简体中文](README.md) · English
 
-This is a fork of the [krkrsdl3](https://github.com/krkrsdl3/krkrsdl3) engine core, used as the KiriKiri runtime of [Mikage Next](https://github.com/itsCheney/Mikage-Next), a visual novel player for iOS. krkrsdl3 is a cross-platform reimplementation of the KiriKiri (KAG / TJS2) engine on SDL3.
+This is a fork of the [krkrsdl3](https://github.com/krkrsdl3/krkrsdl3) engine core, used as the KiriKiri runtime of [Mikage Next](https://github.com/Mikage-Next/Mikage-Next), a visual novel player for iOS. krkrsdl3 is a cross-platform reimplementation of the KiriKiri (KAG / TJS2) engine on SDL3.
 
-This repository holds the engine source only and does not build on its own. Builds go through [krkrsdl3_build](https://github.com/itsCheney/krkrsdl3_build), which includes it as the `cpp/` submodule.
+This repository holds the engine source only and does not build on its own. Builds go through [krkrsdl3_build](https://github.com/Mikage-Next/krkrsdl3_build), which includes it as the `cpp/` submodule.
 
 ## Branches
 

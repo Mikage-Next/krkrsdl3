@@ -2,9 +2,9 @@
 
 简体中文 · [English](README.en.md)
 
-这是 [krkrsdl3](https://github.com/krkrsdl3/krkrsdl3) 核心源码的分支，作为 iOS 视觉小说播放器 [Mikage Next](https://github.com/itsCheney/Mikage-Next) 的 KiriKiri 运行时使用。krkrsdl3 是基于 SDL3 重写的跨平台吉里吉里（KiriKiri / KAG / TJS2）引擎。
+这是 [krkrsdl3](https://github.com/krkrsdl3/krkrsdl3) 核心源码的分支，作为 iOS 视觉小说播放器 [Mikage Next](https://github.com/Mikage-Next/Mikage-Next) 的 KiriKiri 运行时使用。krkrsdl3 是基于 SDL3 重写的跨平台吉里吉里（KiriKiri / KAG / TJS2）引擎。
 
-本仓库只包含引擎源码，不能单独构建。构建入口是 [krkrsdl3_build](https://github.com/itsCheney/krkrsdl3_build)，它把本仓库作为 `cpp/` 子模块引入。
+本仓库只包含引擎源码，不能单独构建。构建入口是 [krkrsdl3_build](https://github.com/Mikage-Next/krkrsdl3_build)，它把本仓库作为 `cpp/` 子模块引入。
 
 ## 分支
 
