@@ -16,7 +16,6 @@
 #include <atomic>
 #include "tjs.h"
 #include "tjsScriptBlock.h"
-#include "tjsError.h"
 #include "tjsArray.h"
 #include "tjsDictionary.h"
 #include "tjsDate.h"
@@ -104,10 +103,6 @@ tTJS::tTJS()
     // ensure variant array stack for function stack
     //	TJSVariantArrayStackAddRef();
     VariantArrayStack = new tTJSVariantArrayStack;
-
-    // per-thread pending error channel used by the VM (engines are
-    // thread-confined, like the variant array stack above)
-    PendingErrorState = TJSGetPendingError();
 
     // ensure hash table for reserved words
     TJSReservedWordsHashAddRef();
