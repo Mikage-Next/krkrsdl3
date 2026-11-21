@@ -707,7 +707,8 @@ bool emotenoderef::drawWithMask(krkrsdl3::iTVPRenderBackend* renderer, void* tar
             colorModulation[i] *= refTop->playerColor[i];
         totalOpa *= refTop->playerColor[3];
     }
-    renderer->SetBlendMode(blendMode, blendMode == 21 ? uniformColor : nullptr);
+    renderer->SetBlend(blendMode, totalOpa, blendMode == 21 ? uniformColor : nullptr,
+                       colorModulation);
     if (blendMode == 6 || totalOpa <= 0)
         return false; // 该模式不绘制（GL 后端原行为）
 

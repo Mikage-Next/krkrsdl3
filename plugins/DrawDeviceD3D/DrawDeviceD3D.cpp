@@ -20,7 +20,7 @@
 namespace drawdevice
 {
 
-// D3D picture blend for a Layer.type: the LayerDrawRect method used when the
+// D3D picture blend for a Layer.type: the DrawRect method used when the
 // backend has no ordinary Layer operations, and the mesh mode for transformed
 // pictures. Types without an exact equivalent there approximate alpha.
 struct PictureBlend
@@ -35,17 +35,17 @@ static PictureBlend PictureBlendFor(int type, int opacity)
     {
         case 0: // ltBinder
         case 1: // ltOpaque
-            return {opacity >= 255 ? B::LBM_COPY : B::LBM_CONSTALPHA, B::MBM_LAYER_COPY};
+            return {opacity >= 255 ? B::BM_COPY : B::BM_CONSTALPHA, B::MBM_LAYER_COPY};
         case 3: // ltAdditive
-            return {B::LBM_ADD, B::MBM_LAYER_ADD};
+            return {B::BM_ADD_RM, B::MBM_LAYER_ADD};
         case 4: // ltSubtractive
-            return {B::LBM_SUB, B::MBM_LAYER_SUB};
+            return {B::BM_SUB, B::MBM_LAYER_SUB};
         case 5: // ltMultiplicative
-            return {B::LBM_MUL_HDA, B::MBM_LAYER_MUL};
+            return {B::BM_MUL_HDA, B::MBM_LAYER_MUL};
         case 12: // ltAddAlpha
-            return {B::LBM_ALPHA, B::MBM_LAYER_ADDALPHA};
+            return {B::BM_ALPHA, B::MBM_LAYER_ADDALPHA};
         default: // ltAlpha and the rest
-            return {B::LBM_ALPHA, 0};
+            return {B::BM_ALPHA, 0};
     }
 }
 
@@ -55,15 +55,15 @@ static int LayerToMeshBlendMode(int lbm)
     using namespace krkrsdl3;
     switch (lbm)
     {
-        case iTVPRenderBackend::LBM_COPY:
-        case iTVPRenderBackend::LBM_CONSTALPHA:
+        case iTVPRenderBackend::BM_COPY:
+        case iTVPRenderBackend::BM_CONSTALPHA:
             return iTVPRenderBackend::MBM_LAYER_COPY;
-        case iTVPRenderBackend::LBM_ADD:
+        case iTVPRenderBackend::BM_ADD_RM:
             return iTVPRenderBackend::MBM_LAYER_ADD;
-        case iTVPRenderBackend::LBM_SUB:
+        case iTVPRenderBackend::BM_SUB:
             return iTVPRenderBackend::MBM_LAYER_SUB;
-        case iTVPRenderBackend::LBM_MUL:
-        case iTVPRenderBackend::LBM_MUL_HDA:
+        case iTVPRenderBackend::BM_MUL_RM:
+        case iTVPRenderBackend::BM_MUL_HDA:
             return iTVPRenderBackend::MBM_LAYER_MUL;
         default:
             return 0;
@@ -444,30 +444,31 @@ void DrawDeviceD3D::DrawQuadTo(void* target,
         cy3 = matrix[1] * l + matrix[5] * b + matrix[13];
     }
     // 混合模式 → Layer 合成方法（软件 RenderManager 语义）：
-    //   2（覆盖）→ LBM_COPY；0（alpha）→ LBM_ALPHA；1（乘）→ LBM_MUL；
-    //   3（加）→ LBM_ADD
-    int lbm = krkrsdl3::iTVPRenderBackend::LBM_ALPHA;
+    //   2（覆盖）→ BM_COPY；0（alpha）→ BM_ALPHA；1（乘）→ BM_MUL_RM；
+    //   3（加）→ BM_ADD_RM
+    int lbm = krkrsdl3::iTVPRenderBackend::BM_ALPHA;
     switch (blendMode)
     {
         case 2:
-            lbm = krkrsdl3::iTVPRenderBackend::LBM_COPY;
+            lbm = krkrsdl3::iTVPRenderBackend::BM_COPY;
             break;
         case 1:
-            lbm = krkrsdl3::iTVPRenderBackend::LBM_MUL;
+            lbm = krkrsdl3::iTVPRenderBackend::BM_MUL_RM;
             break;
         case 3:
-            lbm = krkrsdl3::iTVPRenderBackend::LBM_ADD;
+            lbm = krkrsdl3::iTVPRenderBackend::BM_ADD_RM;
             break;
         default:
-            lbm = krkrsdl3::iTVPRenderBackend::LBM_ALPHA;
+            lbm = krkrsdl3::iTVPRenderBackend::BM_ALPHA;
             break;
     }
     Backend->SetTarget(target);
     Backend->ClearTarget(false);
-    Backend->LayerSetBlend(lbm, opacity, nullptr);
     if (matrix)
     {
-        // 仿射四边形：走网格路径（Layer 合成仅支持矩形）
+        // 仿射四边形：走网格路径（矩形原语仅表达轴对齐矩形）。
+        // 一次 SetBlend 定状态，不再重复设置 Layer/网格两套混合。
+        Backend->SetBlend(LayerToMeshBlendMode(lbm), opacity, nullptr, nullptr);
         float tw = (float)Width, th = (float)Height;
         float v[16] = {
             cx0 / tw * 2.f, cy0 / th * 2.f, 0.f, 0.f, //
@@ -476,12 +477,12 @@ void DrawDeviceD3D::DrawQuadTo(void* target,
             cx3 / tw * 2.f, cy3 / th * 2.f, 0.f, v1, //
         };
         uint16_t idx[] = {0, 1, 2, 2, 3, 0};
-        Backend->SetBlendMode(LayerToMeshBlendMode(lbm), nullptr);
         Backend->DrawMesh(v, 4, idx, 6, srcTexture, opacity);
     }
     else
     {
-        Backend->LayerDrawRect(srcTexture, l, t, r - l, b - t, 0.f, 0.f, u1, v1);
+        Backend->SetBlend(lbm, opacity, nullptr, nullptr);
+        Backend->DrawRect(srcTexture, l, t, r - l, b - t, 0.f, 0.f, u1, v1);
     }
 }
 
@@ -615,7 +616,7 @@ void DrawDeviceD3D::ComposeLayerManager(int index, void* target)
             return;
         srcTex = ScratchTexture;
     }
-    // mode 0 = LBM_ALPHA：透明区域露出下层（D3D 世界层等）
+    // mode 0 = BM_ALPHA：透明区域露出下层（D3D 世界层等）
     DrawQuadTo(target, srcTex, 0, 0, (float)Width, (float)Height, 0, 1.0f, nullptr,
                (float)lw / bufW, (float)lh / bufH);
 }
@@ -658,8 +659,8 @@ static void DrawD3DLayerPictures(DrawDeviceD3D* dev, void* target, D3DLayer* lay
             {
                 if (OperatePictureRect(backend, target, (int)tw, (int)th, pic, (int)x, (int)y))
                     continue;
-                backend->LayerSetBlend(blend.lbm, opa, nullptr);
-                backend->LayerDrawRect(pic->Image->Texture, x, y, pw, ph, u0, v0, u1, v1);
+                backend->SetBlend(blend.lbm, opa, nullptr, nullptr);
+                backend->DrawRect(pic->Image->Texture, x, y, pw, ph, u0, v0, u1, v1);
                 continue;
             }
         }
@@ -675,13 +676,13 @@ static void DrawD3DLayerPictures(DrawDeviceD3D* dev, void* target, D3DLayer* lay
         float cx3 = m[0] * l + m[4] * b + m[12];
         float cy3 = m[1] * l + m[5] * b + m[13];
         float v[16] = {
-            cx0 / tw * 2.f, cy0 / th * 2.f, u0, v0, //
-            cx1 / tw * 2.f, cy1 / th * 2.f, u1, v0, //
-            cx2 / tw * 2.f, cy2 / th * 2.f, u1, v1, //
-            cx3 / tw * 2.f, cy3 / th * 2.f, u0, v1, //
+            cx0 / tw * 2.f, cy0 / th * 2.f, u0, v0,
+            cx1 / tw * 2.f, cy1 / th * 2.f, u1, v0,
+            cx2 / tw * 2.f, cy2 / th * 2.f, u1, v1,
+            cx3 / tw * 2.f, cy3 / th * 2.f, u0, v1,
         };
         uint16_t idx[] = {0, 1, 2, 2, 3, 0};
-        backend->SetBlendMode(blend.mesh, nullptr);
+        backend->SetBlend(blend.mesh, opa, nullptr, nullptr);
         backend->DrawMesh(v, 4, idx, 6, pic->Image->Texture, opa);
     }
 }
@@ -753,7 +754,7 @@ void DrawDeviceD3D::RenderFrame()
         DrawD3DLayerPictures(this, CompositeTarget, l, (float)OffsetX, (float)OffsetY);
         l->DrawEmoteTarget(CompositeTarget);
     }
-    if (activeLayerDrawIndex == 2)
+    if (TransitionActive || activeLayerDrawIndex == 2)
     {
         for (auto* l : backLayers)
         {
@@ -762,7 +763,17 @@ void DrawDeviceD3D::RenderFrame()
         }
     }
     // EmotePlayer 属于其所属的 D3DLayer，由 D3DLayer 在对应平面绘制。
-    if (activeLayerDrawIndex >= 1 && activeLayerDrawIndex < (tjs_int)Managers.size())
+    if (TransitionActive)
+    {
+        const tjs_int otherIndex = (LayerDrawIndex == 1 ? 2 : 1);
+        const tjs_int order[2] = {LayerDrawIndex, otherIndex};
+        for (int i = 0; i < 2; ++i)
+        {
+            if (order[i] >= 1 && order[i] < (tjs_int)Managers.size())
+                ComposeLayerManager(order[i], CompositeTarget);
+        }
+    }
+    else if (activeLayerDrawIndex >= 1 && activeLayerDrawIndex < (tjs_int)Managers.size())
     {
         ComposeLayerManager(activeLayerDrawIndex, CompositeTarget);
     }
@@ -789,7 +800,7 @@ void DrawDeviceD3D::RenderFrame()
             uint16_t idx[] = {0, 1, 2, 2, 3, 0};
             Backend->SetTarget(CompositeTarget);
             Backend->ClearTarget(false);
-            Backend->SetBlendMode(0, nullptr);
+            Backend->SetBlend(krkrsdl3::iTVPRenderBackend::BM_NORMAL, opa, nullptr, nullptr);
             Backend->DrawMesh(v, 4, idx, 6, prevTex, opa);
         }
     }
@@ -1145,8 +1156,8 @@ void D3DLayer::DrawEmoteTarget(void* target)
     if (!tex)
         return;
     Device->GetBackend()->SetTarget(target);
-    Device->GetBackend()->LayerSetBlend(krkrsdl3::iTVPRenderBackend::LBM_ALPHA, 1.0f, nullptr);
-    Device->GetBackend()->LayerDrawRect(tex, 0, 0, (float)Device->GetWidth(), (float)Device->GetHeight());
+    Device->GetBackend()->SetBlend(krkrsdl3::iTVPRenderBackend::BM_ALPHA, 1.0f, nullptr, nullptr);
+    Device->GetBackend()->DrawRect(tex, 0, 0, (float)Device->GetWidth(), (float)Device->GetHeight());
 }
 
 void D3DLayer::finalize()

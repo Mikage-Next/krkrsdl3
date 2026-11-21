@@ -8,15 +8,36 @@
 
 #define NCB_MODULE_NAME TJS_N("PackinOne.dll")
 
+/*
+ * 原版 PackinOne.dll 是若干插件的合集，导出符号包括：
+ *   Layer.fillAlpha / copyBottomBlueToTopAlpha / copyRightBlueToLeftAlpha /
+ *   clipAlphaRect / copyAlphaToProvince / fillByProvince / shrinkCopy /
+ *   shrinkCopyFast、layerExImage、layerExRaster、FontEx、ScriptsAdd、
+ *   StoragesFstat、ArrayAdd / DictAdd。
+ * 本工程把这些实现拆成了独立模块，这里按原 DLL 的组合把它们一起拉起来。
+ *
+ * 其中 layerExBTOA 是 GFX_Movie.tjs 的 MovieControlLayer 每帧要用的
+ * （onFrameUpdate 里 targetLayer.fillAlpha()），不加载它原版视频链路会中断。
+ */
 static void InitPlugin_PackinOne()
 {
     // PackinOne.dll bundles these plugins; a game that links only PackinOne
     // still expects all of them.
     static const tjs_char* const bundled[] = {
-        TJS_N("fstat.dll"), TJS_N("dirlist.dll"), TJS_N("addFont.dll"), TJS_N("saveStruct.dll"),
+        TJS_N("layerExBTOA.dll"), TJS_N("layerExImage.dll"), TJS_N("layerExRaster.dll"),
+        TJS_N("shrinkCopy.dll"),  TJS_N("addFont.dll"),      TJS_N("scriptsEx.dll"),
+        TJS_N("fstat.dll"),       TJS_N("dirlist.dll"),      TJS_N("saveStruct.dll"),
     };
     for (const tjs_char* module : bundled)
-        ncbAutoRegister::LoadModule(module);
+    {
+        try
+        {
+            ncbAutoRegister::LoadModule(module);
+        }
+        catch (...)
+        {
+        }
+    }
 
     try
     {

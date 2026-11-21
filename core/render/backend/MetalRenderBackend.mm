@@ -1668,7 +1668,7 @@ struct MetalRenderBackend::Impl
                                         [inPlace newFunctionWithName:@"layerMain"] error:&error];
             if (!layerInPlacePipeline)
                 SDL_LogWarn(SDL_LOG_CATEGORY_RENDER,
-                            "Metal LayerDrawRect in-place pipeline unavailable: %s",
+                            "Metal DrawRect in-place pipeline unavailable: %s",
                             error.localizedDescription.UTF8String);
         }
         MTLCompileOptions* ordinaryOptions = [MTLCompileOptions new];
@@ -2024,8 +2024,18 @@ void MetalRenderBackend::DrawWindowTexture(void* h, float x, float y, float w, f
         impl_->windows.push_back({r->texture, r, x, y, w, height});
     }
 }
-void MetalRenderBackend::SetBlendMode(int mode, const float* color)
+void MetalRenderBackend::SetBlend(int mode, float opacity, const float* color,
+                                  const float* modulation)
 {
+    blendOpacity_ = opacity;
+    for (int i = 0; i < 4; ++i) blendModulation_[i] = modulation ? modulation[i] : 1.0f;
+    if (IsRMBlend(mode)) {
+        // RenderManager methods for DrawRect; the shader numbers them from 0.
+        impl_->layerParams.flags.z = mode - BM_COPY;
+        impl_->layerParams.flags.w = static_cast<int>(std::clamp(opacity, 0.0f, 1.0f) * 255 + 0.5f);
+        if (color) impl_->layerParams.color = Color(color);
+        return;
+    }
     impl_->mesh.flags.x = mode;
     impl_->mesh.flags.z = mode == 21 && color != nullptr;
     if (color) impl_->mesh.color = Color(color);
@@ -2152,14 +2162,8 @@ bool MetalRenderBackend::DrawDeformedMesh(int divX, int divY,
         return true;
     }
 }
-void MetalRenderBackend::LayerSetBlend(int method, float opacity, const float* color)
-{
-    impl_->layerParams.flags.z = method;
-    impl_->layerParams.flags.w = static_cast<int>(std::clamp(opacity, 0.0f, 1.0f) * 255 + 0.5f);
-    if (color) impl_->layerParams.color = Color(color);
-}
-void MetalRenderBackend::LayerDrawRect(void* h, float x, float y, float w, float height,
-                                     float u0, float v0, float u1, float v1)
+void MetalRenderBackend::DrawRect(void* h, float x, float y, float w, float height,
+                                float u0, float v0, float u1, float v1)
 {
     @autoreleasepool {
         auto& p = *impl_;
