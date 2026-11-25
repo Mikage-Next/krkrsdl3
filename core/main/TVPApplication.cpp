@@ -24,7 +24,7 @@
 #include "WindowManager.h"
 #include "TVPEvent.h"
 #include "TVPCompositor.h"
-#include "KRMovieOverlay.h"
+#include "TVPMoviePresenter.h"
 #include "tjsNativeVideoOverlay.h"
 #include "emoteplayer/emoteresourcecache.h"
 #include "emoteplayer/emotesession.h"

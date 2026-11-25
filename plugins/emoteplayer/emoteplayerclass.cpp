@@ -340,7 +340,10 @@ tTJSVariant ResourceManager::loadInternal(tTJSString path, bool materializeRoot)
             pending->setSeed(_decryptkey);
             pending->setFun(_decryptClo);
             const Uint64 fileLoadStarted = SDL_GetTicksNS();
-            const bool loaded = pending->load(trimPath);
+            // Load by the full storage name: "lzfs://" is dispatched by the
+            // storage layer, which unwraps the LZ4 frame (upstream 023c57b).
+            // The cache stays keyed by the trimmed path.
+            const bool loaded = pending->load(path);
             fileLoadNS = SDL_GetTicksNS() - fileLoadStarted;
             if (!loaded)
                 TVPThrowExceptionMessage(TJS_N("Unable to load Emote resource"));

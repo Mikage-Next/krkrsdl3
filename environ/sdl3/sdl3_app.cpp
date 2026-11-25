@@ -331,8 +331,8 @@ SDL_AppResult SDL_AppInit(void** appstate, int argc, char* argv[])
     // 隐藏命令行（离屏跑要留着 stdout 给测试宿主收日志）
 #ifndef _DEBUG
 #ifdef _KRKRSDL3_WINDOWS
-    if (!krkrsdl3::TVPAutoTestOffscreen())
-        ShowWindow(GetConsoleWindow(), SW_HIDE);
+    //if (!krkrsdl3::TVPAutoTestOffscreen())
+    //    ShowWindow(GetConsoleWindow(), SW_HIDE);
 #endif
 #endif
     if (!krkrsdl3::TVPAutoTestOffscreen())
@@ -629,6 +629,14 @@ void sendMouseScroll(int dx, int dy, float pX, float pY)
 }
 #endif
 
+#if defined(_KRKRSDL3_ANDROID)
+// 真实鼠标 / 虚拟鼠标的拖拽状态：左键按下后移动超过 4px，
+// 抬起时就只发 MouseUp，不再合成一次 Click（滑块拖完不会顺手翻页）。
+static bool g_mouseLeftDragging = false;
+static float g_mouseDownX = 0.0f;
+static float g_mouseDownY = 0.0f;
+#endif
+
 SDL_AppResult SDL_AppEvent(void* appstate, SDL_Event* event)
 {
     switch (event->type)
@@ -672,10 +680,23 @@ SDL_AppResult SDL_AppEvent(void* appstate, SDL_Event* event)
             krkrsdl3::KRKR_Trig_TextInput(data);
             break;
         }
-#if defined(_KRKRSDL3_WINDOWS) || defined(_KRKRSDL3_LINUX) || defined(_KRKRSDL3_EMSCRIPTEN)  || defined(_KRKRSDL3_MACOS)
+#if defined(_KRKRSDL3_WINDOWS) || defined(_KRKRSDL3_LINUX) || defined(_KRKRSDL3_EMSCRIPTEN)  || defined(_KRKRSDL3_MACOS) || defined(_KRKRSDL3_ANDROID)
         // 鼠标事件
+        // Android 上启用这一支是为了接住 NimbusVN 虚拟输入层注入的真实鼠标事件；
+        // SDL 由触摸合成的鼠标事件（which == SDL_TOUCH_MOUSEID）必须过滤掉，
+        // 否则一次点按会同时走 FINGER 和 MOUSE 两条路，变成两下。
         case SDL_EVENT_MOUSE_BUTTON_DOWN:
         {
+            if (event->button.which == SDL_TOUCH_MOUSEID)
+                break;
+#if defined(_KRKRSDL3_ANDROID)
+            if (event->button.button == SDL_BUTTON_LEFT)
+            {
+                g_mouseLeftDragging = false;
+                g_mouseDownX = event->button.x;
+                g_mouseDownY = event->button.y;
+            }
+#endif
             tTVPMouseButton tmp = mbX1;
             switch (event->button.button)
             {
@@ -700,6 +721,16 @@ SDL_AppResult SDL_AppEvent(void* appstate, SDL_Event* event)
         }
         case SDL_EVENT_MOUSE_BUTTON_UP:
         {
+            if (event->button.which == SDL_TOUCH_MOUSEID)
+                break;
+            bool generateClick = true;
+#if defined(_KRKRSDL3_ANDROID)
+            if (event->button.button == SDL_BUTTON_LEFT)
+            {
+                generateClick = !g_mouseLeftDragging;
+                g_mouseLeftDragging = false;
+            }
+#endif
             tTVPMouseButton tmp = mbX1;
             switch (event->button.button)
             {
@@ -718,17 +749,31 @@ SDL_AppResult SDL_AppEvent(void* appstate, SDL_Event* event)
 
             if (tmp != mbX1)
             {
-                krkrsdl3::KRKR_Trig_MouseUp(tmp, event->button.x, event->button.y);
+                krkrsdl3::KRKR_Trig_MouseUp(tmp, event->button.x, event->button.y,
+                                            generateClick);
             }
             break;
         }
         case SDL_EVENT_MOUSE_MOTION:
         {
+            if (event->motion.which == SDL_TOUCH_MOUSEID)
+                break;
+#if defined(_KRKRSDL3_ANDROID)
+            if ((event->motion.state & SDL_BUTTON_LMASK) != 0)
+            {
+                const float dx = event->motion.x - g_mouseDownX;
+                const float dy = event->motion.y - g_mouseDownY;
+                if (dx * dx + dy * dy > 16.0f)
+                    g_mouseLeftDragging = true;
+            }
+#endif
             krkrsdl3::KRKR_Trig_MouseMove(event->motion.x, event->motion.y);
             break;
         }
         case SDL_EVENT_MOUSE_WHEEL:
         {
+            if (event->wheel.which == SDL_TOUCH_MOUSEID)
+                break;
             krkrsdl3::KRKR_Trig_MouseScroll(event->wheel.x, event->wheel.y, event->wheel.x,
                                                 event->wheel.y);
             break;

@@ -441,6 +441,21 @@ ttstr tTVPStorageMediaManager::NormalizeStorageName(const ttstr& name,
 
     tmp = media + TJS_N("://") + domain + path;
 
+    // 隔离存档：宿主把 TVPDataPath 指到独立目录后，KAG 侧写存档用的相对名
+    // "savedata/xxx" 仍然会按当前目录解析成 <游戏目录>/savedata/xxx。
+    // 在这里把这一个前缀改写到 TVPDataPath —— 读取、写入、存在性检查和
+    // 目录枚举都走本函数，所以游戏脚本不需要做任何改动。
+    // 没指定独立目录时 TVPDataPath 就是 <游戏目录>/savedata/，条件不成立。
+    if (TVPDataPath.GetLen() > 0 && !TVPProjectDir.IsEmpty())
+    {
+        const ttstr game_savedata = TVPProjectDir + TJS_N("savedata/");
+        if (game_savedata != TVPDataPath &&
+            !TJS_strncmp(tmp.c_str(), game_savedata.c_str(), game_savedata.GetLen()))
+        {
+            tmp = TVPDataPath + ttstr(tmp.c_str() + game_savedata.GetLen());
+        }
+    }
+
     return tmp;
 }
 //---------------------------------------------------------------------------
@@ -632,7 +647,15 @@ bool TVPIsExistentStorageNoSearchNoNormalize(const ttstr& name)
         ttstr arcname(name, (int)(sharp_pos - name.c_str()));
 
         tTVPArchive* arc;
-        arc = TVPArchiveCache.Get(arcname);
+        try
+        {
+            arc = TVPArchiveCache.Get(arcname);
+        }
+        catch (...)
+        {
+            // 归档不存在时 isExistentStorage 应返回 false，而不是抛出异常。
+            return false;
+        }
         bool ret;
         try
         {
@@ -874,7 +897,17 @@ static tjs_uint TVPRebuildAutoPathTable()
             tjs_int in_arc_name_len = in_arc_name.GetLen();
 
             tTVPArchive* arc;
-            arc = TVPArchiveCache.Get(arcname);
+            try
+            {
+                arc = TVPArchiveCache.Get(arcname);
+            }
+            catch (...)
+            {
+                // auto path 指向的归档不存在/损坏。
+                // 这里只应跳过这一条 auto path，不能让整个启动失败。
+                TVPAddLog(ttstr(TJS_N("(warning) auto path archive is not available: ")) + arcname);
+                continue;
+            }
 
             try
             {
