@@ -162,6 +162,9 @@ int tTVPThread::StartProc(void* arg)
     {
         // Mikage (GPL-3.0-or-later): "TVPMoviePlayer" is the decode thread of
         // the rewritten movie player; the TVPVideoPlayer* names are the old one.
+        // On Apple, user-interactive is the main thread's own class, so the
+        // threads in this list run at the same level as the main thread, not
+        // below it as the comment above says.
         static const char* const realtime[] = {"TVPMoviePlayer", "TVPVideoPlayer",
                                                "TVPVideoPlayerVideo", "TVPVideoPlayerAudio",
                                                "TVPWaveSoundBufferThread", "TVPTimerThread"};
