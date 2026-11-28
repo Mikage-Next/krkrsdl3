@@ -338,6 +338,11 @@ void tTJSNI_VideoOverlay::Open(const ttstr& _name)
             reusedCachedOverlay = true;
             VideoOverlay = CachedOverlay;
             CachedOverlay = nullptr;
+            // Mikage (GPL-3.0-or-later): Rewind() reopens the file itself.
+            // istream was only opened to check that the storage exists; free
+            // it before Rewind() can throw, or every replay leaks a stream.
+            delete istream;
+            istream = NULL;
             VideoOverlay->Rewind();
         }
         else
