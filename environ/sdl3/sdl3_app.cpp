@@ -56,6 +56,9 @@ static SDL_GLContext tvp_glContext = NULL;
 static void* tvp_hostWindowScene = NULL;
 static bool tvp_hostMenuGestureEnabled = true;
 static int tvp_noWindowFrames = 0;
+// Mikage (GPL-3.0-or-later): TVPDrawSceneOnce's frame clock, reset per session.
+static tjs_uint64 tvp_drawSceneLastTick = 0;
+static bool tvp_drawSceneLastTickValid = false;
 static std::string tvp_activeRendererName;
 
 extern void TVPResetAudioSessionState();
@@ -880,6 +883,7 @@ void SDL_AppQuit(void* appstate, SDL_AppResult result)
     tvp_hostWindowScene = NULL;
     tvp_hostMenuGestureEnabled = true;
     tvp_noWindowFrames = 0;
+    tvp_drawSceneLastTickValid = false;
     tvp_activeRendererName.clear();
 #if defined(_KRKRSDL3_ANDROID) || defined(_KRKRSDL3_EMSCRIPTEN) || defined(_KRKRSDL3_IOS)
     fingers.clear();
@@ -924,9 +928,23 @@ void TVPSetWindowSize(int w, int h)
 
 int TVPDrawSceneOnce(int interval)
 {
-    static tjs_uint64 lastTick = TVPGetRoughTickCount();
     tjs_uint64 curTick = TVPGetRoughTickCount();
-    int remain = interval - (curTick - lastTick);
+    // Mikage (GPL-3.0-or-later): SDL_Quit() restarts SDL_GetTicks() at 0, so a
+    // later session (or any clock step back) sees curTick < lastTick. The
+    // unsigned difference would wrap and hold a modal window's loop for as
+    // long as the previous session ran; draw a frame now instead.
+    if (!tvp_drawSceneLastTickValid)
+    {
+        // First call of a session: wait one interval, as before.
+        tvp_drawSceneLastTick = curTick;
+        tvp_drawSceneLastTickValid = true;
+    }
+    else if (curTick < tvp_drawSceneLastTick)
+    {
+        tvp_drawSceneLastTick = curTick;
+        interval = 0;
+    }
+    int remain = interval - (int)(curTick - tvp_drawSceneLastTick);
     if (remain <= 0)
     {
         SDL_AppIterate(NULL);
@@ -935,7 +953,7 @@ int TVPDrawSceneOnce(int interval)
         {
             SDL_AppEvent(NULL, &event);
         }
-        lastTick = curTick;
+        tvp_drawSceneLastTick = curTick;
         return 0;
     }
     else
