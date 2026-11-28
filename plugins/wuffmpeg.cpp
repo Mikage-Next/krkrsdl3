@@ -21,11 +21,9 @@ class FFWaveDecoder : public tTVPWaveDecoder // decoder interface
     int StreamIdx;
     int audio_buf_index;
     int audio_buf_samples;
-    int64_t audio_frame_next_pts;
     int64_t stream_start_time;
     tTVPWaveFormat Format; // output PCM format
     AVSampleFormat AVFmt;
-    AVPacket pkt_temp;
     AVStream* AudioStream;
 
     // release in Clear()
@@ -190,58 +188,43 @@ bool FFWaveDecoder::SetPosition(tjs_uint64 samplepos)
     if (samplepos && !Format.Seekable)
         return false;
 
-    int64_t seek_target = samplepos / av_q2d(AudioStream->time_base) / Format.SamplesPerSec;
-    if (AudioStream->start_time != AV_NOPTS_VALUE)
-    {
-        seek_target += AudioStream->start_time;
-    }
-    if (Packet.duration <= 0)
-    {
-        if (Packet.data)
-            av_packet_unref(&Packet);
-        if (!ReadPacket())
-        {
-            int ret = avformat_seek_file(FormatCtx, StreamIdx, 0, 0, 0, AVSEEK_FLAG_BACKWARD);
-            if (ret < 0)
-                return false;
-            if (!ReadPacket())
-                return false;
-        }
-    }
-    int64_t seek_temp = seek_target - Packet.duration;
+    // Mikage (GPL-3.0-or-later): the old loop waited for audio_frame_next_pts,
+    // which was never updated, so any non-zero seek decoded to the end of
+    // the file and failed. It also took frame->pts as a sample count,
+    // although it is in the stream's time_base (1/14112000 for mp3), and it
+    // read Packet fields after ReadPacket had unreferenced the packet.
+    // Seek to the last point at or before the target, flush the decoder, and
+    // decode forward to the frame that holds the target sample.
+    const AVRational sampleBase = {1, (int)Format.SamplesPerSec};
+    const int64_t start = AudioStream->start_time != AV_NOPTS_VALUE ? AudioStream->start_time : 0;
+    const int64_t seek_target =
+        av_rescale_q((int64_t)samplepos, sampleBase, AudioStream->time_base) + start;
+    if (avformat_seek_file(FormatCtx, StreamIdx, INT64_MIN, seek_target, seek_target, 0) < 0 &&
+        avformat_seek_file(FormatCtx, StreamIdx, seek_target, seek_target, INT64_MAX, 0) < 0)
+        return false;
+    avcodec_flush_buffers(avctx);
+    audio_buf_index = audio_buf_samples = 0;
+
+    int64_t next = AV_NOPTS_VALUE; // sample position after the previous frame
     for (;;)
     {
-        if (seek_temp < 0)
-            seek_temp = 0;
-        int ret = avformat_seek_file(FormatCtx, StreamIdx, seek_temp, seek_temp, seek_temp,
-                                     AVSEEK_FLAG_BACKWARD);
-        if (ret < 0)
+        const int samples = audio_decode_frame();
+        if (samples < 0)
             return false;
-        if (Packet.data)
-            av_packet_unref(&Packet);
-        if (!ReadPacket())
-            return false;
-        if (seek_target < Packet.dts)
-        {
-            seek_temp -= Packet.duration;
+        int64_t ts = frame->pts != AV_NOPTS_VALUE ? frame->pts : frame->best_effort_timestamp;
+        int64_t first = ts != AV_NOPTS_VALUE
+                            ? av_rescale_q(ts - start, AudioStream->time_base, sampleBase)
+                            : next;
+        if (first == AV_NOPTS_VALUE)
+            first = (int64_t)samplepos; // no timing at all: play from here
+        next = first + samples;
+        if ((int64_t)samplepos >= next)
             continue;
-        }
-        pkt_temp = Packet;
-        do
-        {
-            audio_buf_samples = audio_decode_frame();
-            if (audio_buf_samples < 0)
-            {
-                return false;
-            }
-        } while (samplepos > audio_frame_next_pts);
-        audio_buf_index =
-            (samplepos - frame->pts) /*/ av_q2d(AudioStream->time_base) / Format.SamplesPerSec*/;
-        if (audio_buf_index < 0)
-            audio_buf_index = 0;
+        audio_buf_samples = samples;
+        const int64_t index = (int64_t)samplepos - first;
+        audio_buf_index = index < 0 ? 0 : (int)index; // < samples by the check above
         return true;
     }
-    return false;
 }
 
 bool FFWaveDecoder::SetStream(const ttstr& url)
@@ -301,6 +284,9 @@ bool FFWaveDecoder::SetStream(const ttstr& url)
     }
 
     avctx->codec_id = codec->id;
+    // Mikage (GPL-3.0-or-later): frames then carry timestamps the decoder
+    // has corrected for skipped samples (mp3 encoder delay).
+    avctx->pkt_timebase = FormatCtx->streams[StreamIdx]->time_base;
     avctx->workaround_bugs = /*workaround_bugs*/ 1;
     avctx->error_concealment = 3;
 
@@ -352,8 +338,6 @@ bool FFWaveDecoder::SetStream(const ttstr& url)
 
     audio_buf_index = 0;
     audio_buf_samples = 0;
-    audio_frame_next_pts = 0;
-    pkt_temp.stream_index = -1;
 
     return true;
 }
