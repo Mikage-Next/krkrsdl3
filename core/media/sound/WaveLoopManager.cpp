@@ -20,6 +20,18 @@
 
 #include "TVPWaveManager.h"
 #include "PlatformMutex.h"
+// Mikage (GPL-3.0-or-later): a decoder that cannot seek used to fail
+// silently here, so a loop link fell through to the end of the file and the
+// loop restarted from 0. Say so. SDL_Log because this runs on the sound
+// thread and TVPAddLog is not thread-safe. The playback behaviour is
+// unchanged.
+#include <SDL3/SDL_log.h>
+static void TVPWaveLoopSeek(tTVPWaveDecoder* decoder, tjs_int64 pos)
+{
+    if (!decoder->SetPosition(pos))
+        SDL_LogWarn(SDL_LOG_CATEGORY_AUDIO, "wave decoder could not seek to sample %lld",
+                    (long long)pos);
+}
 
 //---------------------------------------------------------------------------
 const int TVPWaveLoopLinkGiveUpCount = 10;
@@ -245,7 +257,7 @@ void tTVPWaveLoopManager::SetPosition(tjs_int64 pos)
     volatile tTJSCriticalSectionHolder CS(DataCS);
     Position = pos;
     ClearCrossFadeInformation();
-    Decoder->SetPosition(pos);
+    TVPWaveLoopSeek(Decoder, pos);
 }
 //---------------------------------------------------------------------------
 void tTVPWaveLoopManager::Decode(void* dest,
@@ -289,7 +301,7 @@ void tTVPWaveLoopManager::Decode(void* dest,
 
                 Position = link.To;
                 if (!CrossFadeSamples)
-                    Decoder->SetPosition(Position);
+                    TVPWaveLoopSeek(Decoder, Position);
                 continue;
             }
 
@@ -359,7 +371,7 @@ void tTVPWaveLoopManager::Decode(void* dest,
 
                         Decoder->Render((void*)src1, before_count + after_count, decoded1);
 
-                        Decoder->SetPosition(link.To - before_count);
+                        TVPWaveLoopSeek(Decoder, link.To - before_count);
 
                         Decoder->Render((void*)src2, before_count + after_count, decoded2);
 
@@ -451,7 +463,7 @@ void tTVPWaveLoopManager::Decode(void* dest,
                     break;
                 }
                 Position = 0;
-                Decoder->SetPosition(0);
+                TVPWaveLoopSeek(Decoder, 0);
             }
             d += decoded * Format->BytesPerSample * Format->Channels;
         }
