@@ -33,6 +33,9 @@ extern void TVPOnError();
 extern ttstr TVPGetImportantLog();
 extern void TVPSetLogLocation(const ttstr& loc);
 extern void TVPStartLogToFile(bool clear);
+// Mikage (GPL-3.0-or-later): sync the log file now; reset per-session state.
+extern void TVPFlushLogFile();
+extern void TVPResetLogToFileForSession();
 extern void TVPAddLoggingHandler(tTJSVariantClosure clo);
 extern void TVPRemoveLoggingHandler(tTJSVariantClosure clo);
 //---------------------------------------------------------------------------

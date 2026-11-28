@@ -853,6 +853,9 @@ void SDL_AppQuit(void* appstate, SDL_AppResult result)
         delete Application;
         Application = NULL;
     }
+    // Mikage (GPL-3.0-or-later): after the exit stages, so their errors are
+    // still logged; the next game starts without file logging.
+    TVPResetLogToFileForSession();
     TVPResetAudioSessionState();
     // 后端先于上下文销毁（GL 后端析构需要上下文仍有效）
     iTVPTexture2D::RecycleProcess();

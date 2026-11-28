@@ -222,6 +222,9 @@ class tTVPLogStreamHolder
     tTJSBinaryStream* Stream;
     bool Alive;
     bool OpenFailed;
+    // Mikage (GPL-3.0-or-later): when Stream was last synced to disk.
+    tjs_uint64 LastFlushTick;
+    bool Unflushed;
 
 public:
     tTVPLogStreamHolder()
@@ -229,6 +232,8 @@ public:
         Stream = NULL;
         Alive = true;
         OpenFailed = false;
+        LastFlushTick = 0;
+        Unflushed = false;
     }
     ~tTVPLogStreamHolder()
     {
@@ -243,6 +248,7 @@ private:
 public:
     void Clear();                // clear log stream
     void Log(const ttstr& text); // log given text
+    void Flush();                // sync written lines to disk
 
     void Reopen()
     {
@@ -251,6 +257,7 @@ public:
         Stream = NULL;
         Alive = false;
         OpenFailed = false;
+        Unflushed = false;
     } // reopen log stream
 
 } static TVPLogStreamHolder;
@@ -309,6 +316,8 @@ void tTVPLogStreamHolder::Clear()
     // clear log text
     if (Stream)
         delete Stream;
+    Stream = NULL; // Open() can return early and leave it unset
+    Unflushed = false;
 
     Open("wb");
 }
@@ -327,13 +336,21 @@ void tTVPLogStreamHolder::Log(const ttstr& text)
             {
                 // cannot write
                 delete Stream;
+                Stream = NULL;
                 OpenFailed = true;
                 return;
             }
             Stream->Write("\n", 1);
 
-            // flush
-            Stream->Flush();
+            // Mikage (GPL-3.0-or-later): SDL_FlushIO is fflush plus a full
+            // disk sync (F_FULLFSYNC on Apple), far too slow for every line.
+            // Sync at most once a second here; TVPOnError, backgrounding and
+            // the session end sync at once. A crash can lose up to a second
+            // of lines (those still in the C library's buffer).
+            Unflushed = true;
+            const tjs_uint64 now = TVPGetRoughTickCount();
+            if (now < LastFlushTick || now - LastFlushTick >= 1000)
+                Flush();
         }
     }
     catch (...)
@@ -346,8 +363,24 @@ void tTVPLogStreamHolder::Log(const ttstr& text)
         catch (...)
         {
         }
+        Stream = NULL;
 
         OpenFailed = true;
+    }
+}
+//---------------------------------------------------------------------------
+void tTVPLogStreamHolder::Flush()
+{
+    LastFlushTick = TVPGetRoughTickCount();
+    if (!Stream || !Unflushed)
+        return;
+    Unflushed = false;
+    try
+    {
+        Stream->Flush();
+    }
+    catch (...)
+    {
     }
 }
 //---------------------------------------------------------------------------
@@ -529,7 +562,31 @@ void TVPOnError()
 {
     if (TVPAutoLogToFileOnError)
         TVPStartLogToFile(TVPAutoClearLogOnError);
+    // Mikage (GPL-3.0-or-later): the error is what the log is for.
+    if (TVPLoggingToFile)
+        TVPLogStreamHolder.Flush();
     // TVPOnErrorHook();
+}
+//---------------------------------------------------------------------------
+
+//---------------------------------------------------------------------------
+// Mikage (GPL-3.0-or-later): per-session log state
+//---------------------------------------------------------------------------
+void TVPFlushLogFile()
+{
+    if (TVPLoggingToFile)
+        TVPLogStreamHolder.Flush();
+}
+//---------------------------------------------------------------------------
+void TVPResetLogToFileForSession()
+{
+    // An embedding host runs several games in one process. Without this, one
+    // script error turned file logging on for every later game as well.
+    TVPLogStreamHolder.Flush();
+    TVPLogStreamHolder.Reopen();
+    TVPLoggingToFile = false;
+    TVPAutoLogToFileOnError = true;
+    TVPAutoClearLogOnError = false;
 }
 //---------------------------------------------------------------------------
 
