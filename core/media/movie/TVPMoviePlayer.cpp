@@ -159,6 +159,7 @@ void tTVPMoviePlayer::Close()
     {
         tTJSUniqueLock lock(pictureLock_);
         pending_.clear();
+        spare_.clear();
         front_.rgba.clear();
         front_.width = 0;
         front_.height = 0;
@@ -375,7 +376,7 @@ void tTVPMoviePlayer::Seek(double positionMs)
     {
         tTJSUniqueLock lock(pictureLock_);
         frontValid_ = false;
-        pending_.clear();
+        ClearPendingLocked();
         pictureCond_.notify_all();
     }
 
@@ -559,6 +560,7 @@ bool tTVPMoviePlayer::Advance()
         {
             while (pending_.size() > 1 && pending_[1].pts <= now)
             {
+                RecycleLocked(pending_.front().rgba);
                 pending_.pop_front();
                 ++dropped_;
             }
@@ -571,6 +573,8 @@ bool tTVPMoviePlayer::Advance()
             front_.width = pending_.front().width;
             front_.height = pending_.front().height;
             front_.pts = pending_.front().pts;
+            // The swap left the previous front picture's buffer here.
+            RecycleLocked(pending_.front().rgba);
             pending_.pop_front();
             frontValid_ = true;
             advanced = true;
@@ -705,6 +709,24 @@ void tTVPMoviePlayer::FeedVideo(const tTVPMoviePacket& packet)
         PushPicture(frame);
 }
 
+// Mikage (GPL-3.0-or-later): frame buffer pool, see spare_.
+void tTVPMoviePlayer::RecycleLocked(std::vector<uint8_t>& rgba)
+{
+    if (rgba.capacity() == 0)
+        return;
+    // Ring + front + one being filled is the most ever in flight.
+    if (spare_.size() < size_t(kMaxPendingPictures) + 2)
+        spare_.push_back(std::move(rgba));
+    rgba = std::vector<uint8_t>();
+}
+
+void tTVPMoviePlayer::ClearPendingLocked()
+{
+    for (tPicture& picture : pending_)
+        RecycleLocked(picture.rgba);
+    pending_.clear();
+}
+
 void tTVPMoviePlayer::PushPicture(tTVPMovieFrame& frame)
 {
     if (frame.kind != tTVPMovieFrame::tKind::Video)
@@ -730,10 +752,26 @@ void tTVPMoviePlayer::PushPicture(tTVPMovieFrame& frame)
     picture.width = frame.width;
     picture.height = frame.height;
     picture.pts = frame.pts;
-    picture.rgba.resize(size_t(frame.width) * size_t(frame.height) * 4);
+    {
+        tTJSUniqueLock lock(pictureLock_);
+        if (!spare_.empty())
+        {
+            picture.rgba.swap(spare_.back());
+            spare_.pop_back();
+        }
+    }
+    // Mikage (GPL-3.0-or-later): a recycled buffer of the same size needs no
+    // resize, so nothing is zero-filled; the conversion overwrites it.
+    const size_t bytes = size_t(frame.width) * size_t(frame.height) * 4;
+    if (picture.rgba.size() != bytes)
+        picture.rgba.resize(bytes);
 
     if (!TVPConvertFrameToRGBA(frame, picture.rgba.data(), frame.width * 4))
+    {
+        tTJSUniqueLock lock(pictureLock_);
+        RecycleLocked(picture.rgba);
         return;
+    }
 
     // 首帧决定实际显示尺寸与宽高比。
     if (codedWidth_ <= 0 || codedHeight_ <= 0)
@@ -747,7 +785,10 @@ void tTVPMoviePlayer::PushPicture(tTVPMovieFrame& frame)
     {
         tTJSUniqueLock lock(pictureLock_);
         if (pending_.size() >= kMaxPendingPictures)
+        {
+            RecycleLocked(picture.rgba);
             return;
+        }
         const bool firstPicture = !firstFrameSeen_.load();
         pending_.push_back(std::move(picture));
         firstFrameSeen_ = true;
@@ -1128,7 +1169,7 @@ void tTVPMoviePlayer::PerformSeek(double positionMs, bool flushAudio)
 
     {
         tTJSUniqueLock lock(pictureLock_);
-        pending_.clear();
+        ClearPendingLocked();
         frontValid_ = false;
         pictureCond_.notify_all();
     }

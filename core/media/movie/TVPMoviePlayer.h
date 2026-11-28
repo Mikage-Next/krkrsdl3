@@ -192,6 +192,12 @@ private:
     tTVPCondition pictureCond_;
     std::deque<tPicture> pending_;
     tPicture front_;
+    // Mikage (GPL-3.0-or-later): RGBA buffers of shown, dropped and flushed
+    // pictures, reused by PushPicture instead of a new zero-filled w*h*4
+    // allocation per frame. Guarded by pictureLock_.
+    std::vector<std::vector<uint8_t>> spare_;
+    void RecycleLocked(std::vector<uint8_t>& rgba);
+    void ClearPendingLocked();
     bool frontValid_ = false;
     std::atomic<bool> newFrameFlag_{false};
     int dropped_ = 0; // 统计用：被丢弃的过期帧数
