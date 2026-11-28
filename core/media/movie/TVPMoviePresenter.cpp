@@ -63,17 +63,29 @@ tTVPMoviePresenter::tTVPMoviePresenter(tMode mode)
         sprite_->yPos = 0;
     }
 
-    TVPAddContinuousEventHook(this);
+    SetContinuousHook(true);
 }
 
 tTVPMoviePresenter::~tTVPMoviePresenter()
 {
-    TVPRemoveContinuousEventHook(this);
+    SetContinuousHook(false);
 
     delete player_;
     player_ = nullptr;
 
     DestroySprite();
+}
+
+void tTVPMoviePresenter::SetContinuousHook(bool hooked)
+{
+    // TVPAddContinuousEventHook does not check for duplicates.
+    if (hooked == continuousHooked_)
+        return;
+    continuousHooked_ = hooked;
+    if (hooked)
+        TVPAddContinuousEventHook(this);
+    else
+        TVPRemoveContinuousEventHook(this);
 }
 
 void tTVPMoviePresenter::Release()
@@ -254,6 +266,7 @@ void tTVPMoviePresenter::SetVisible(bool visible)
 
 void tTVPMoviePresenter::Play()
 {
+    SetContinuousHook(true);
     player_->Play();
     visible_ = true;
 
@@ -264,6 +277,7 @@ void tTVPMoviePresenter::Play()
 
 void tTVPMoviePresenter::Pause()
 {
+    SetContinuousHook(true); // a paused layer video still posts a frame after a seek
     player_->Pause();
 }
 
@@ -272,10 +286,12 @@ void tTVPMoviePresenter::Stop()
     player_->Pause();
     visible_ = false;
     ApplyVisibility();
+    SetContinuousHook(false);
 }
 
 void tTVPMoviePresenter::SetPosition(uint64_t tick)
 {
+    SetContinuousHook(true);
     player_->Seek(static_cast<double>(tick));
     // 同步熄灯：定位后到新帧解出来之前，画面不该还停在上一次的位置。
     ApplyVisibility();
@@ -304,6 +320,7 @@ void tTVPMoviePresenter::GetStatus(tTVPVideoStatus* status)
 
 void tTVPMoviePresenter::Rewind()
 {
+    SetContinuousHook(true);
     RestartPlayback();
 }
 
@@ -360,6 +377,7 @@ void tTVPMoviePresenter::SetFrame(int frame)
     const double fps = player_->Fps();
     if (fps <= 0.0)
         return;
+    SetContinuousHook(true);
     player_->Seek(frame * TVPMovieMsPerSecond / fps);
 }
 

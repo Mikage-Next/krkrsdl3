@@ -101,6 +101,9 @@ protected:
     void Execute() override;
 
 private:
+    // Mikage (GPL-3.0-or-later): wakes the decode thread from a parked wait
+    // (Play, Seek, Close).
+    void WakeDecoder();
     struct tPicture
     {
         std::vector<uint8_t> rgba;

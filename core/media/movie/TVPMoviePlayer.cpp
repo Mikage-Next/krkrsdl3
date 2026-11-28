@@ -38,6 +38,14 @@ constexpr size_t kMaxQueuedAudioPackets = 256;
 // 解码线程在无事可做时的轮询间隔（毫秒）。
 constexpr unsigned kIdleSleepMs = 2;
 
+// Mikage (GPL-3.0-or-later): how long the decode thread waits while it is
+// parked (paused, stopped in the reuse cache, or finished). Play, Seek and
+// Close wake it at once (WakeDecoder), so this only bounds a lost wake-up
+// on platforms whose thread sleep has no latched wake event. Before, a
+// parked player woke every 2 ms on a critical-latency timer, for as long
+// as it stayed cached.
+constexpr unsigned kParkedSleepMs = 100;
+
 // 有视频流却迟迟解不出第一帧时的容忍时长。解码器不报错、也不给画面
 // （不支持的 profile / 缺参考帧之类），再等下去就是挂着黑屏。
 constexpr tjs_uint64 kNoFrameTimeoutMs = 5000;
@@ -138,6 +146,12 @@ void tTVPMoviePlayer::Close()
     // 线程只等一次：tTVPThread 的 join 不可重入。
     if (!threadStopped_)
     {
+        // Mikage (GPL-3.0-or-later): StopThread wakes the thread's own sleep,
+        // not a parked wait on pictureCond_.
+        {
+            tTJSUniqueLock lock(pictureLock_);
+            pictureCond_.notify_all();
+        }
         threadStopped_ = true;
         StopThread();
     }
@@ -153,6 +167,19 @@ void tTVPMoviePlayer::Close()
     }
 
     ReleaseResources();
+}
+
+void tTVPMoviePlayer::WakeDecoder()
+{
+    {
+        tTJSUniqueLock lock(pictureLock_);
+        pictureCond_.notify_all();
+    }
+    // Resume() is also the thread's wake-up (EVFILT_USER on Apple). A player
+    // that never opened has no running thread to wake; starting it here
+    // would make it exit before Open().
+    if (demuxer_ != nullptr && !threadStopped_)
+        Resume();
 }
 
 void tTVPMoviePlayer::ReleaseResources()
@@ -287,6 +314,7 @@ void tTVPMoviePlayer::Play()
         tTJSUniqueLock lock(clockLock_);
         baseTick_ = TVPGetTickCount();
     }
+    WakeDecoder();
 
     // 不在这里直接开设备：先让解码线程攒几块，否则开头必定欠载。
     audioStarted_ = false;
@@ -338,6 +366,9 @@ void tTVPMoviePlayer::Seek(double positionMs)
 {
     // 先置定位标记：解码线程从这一刻起不再投递音频/视频。
     pendingSeek_.store(ClampPosition(positionMs));
+    // Mikage (GPL-3.0-or-later): a parked thread would only see it after
+    // kParkedSleepMs, and the wait below would hold the main thread.
+    WakeDecoder();
 
     // 前台帧必须同步作废：解码线程处理定位要花几毫秒，这段窗口里若还留着
     // 旧帧，画面就会闪一下上一次的内容（overlay 复用同一个 sprite 时尤其明显）。
@@ -619,7 +650,7 @@ void tTVPMoviePlayer::DecodeLoop()
 
         if (!playing_.load(std::memory_order_relaxed))
         {
-            Sleep(kIdleSleepMs);
+            Sleep(kParkedSleepMs);
             continue;
         }
 
@@ -636,7 +667,7 @@ void tTVPMoviePlayer::DecodeLoop()
             if (!HandleEnd())
             {
                 while (!GetTerminated() && pendingSeek_.load() == TVPMovieNoTime)
-                    Sleep(kIdleSleepMs);
+                    Sleep(kParkedSleepMs);
                 continue;
             }
             continue;
@@ -687,7 +718,8 @@ void tTVPMoviePlayer::PushPicture(tTVPMovieFrame& frame)
         while (!GetTerminated() && pending_.size() >= kMaxPendingPictures &&
                pendingSeek_.load() == TVPMovieNoTime && !ended_.load())
         {
-            pictureCond_.WaitFor(pictureLock_, 10);
+            // Mikage (GPL-3.0-or-later): a paused player's ring stays full.
+            pictureCond_.WaitFor(pictureLock_, playing_.load() ? 10 : kParkedSleepMs);
         }
     }
 
@@ -1062,9 +1094,11 @@ bool tTVPMoviePlayer::HandleEnd()
             tTJSUniqueLock lock(pictureLock_);
             if (pending_.empty())
                 break;
-            pictureCond_.WaitFor(pictureLock_, 10);
+            // Mikage (GPL-3.0-or-later): paused at the end, nothing consumes.
+            pictureCond_.WaitFor(pictureLock_, playing_.load() ? 10 : kParkedSleepMs);
         }
-        Sleep(kIdleSleepMs);
+        if (playing_.load())
+            Sleep(kIdleSleepMs);
     }
 
     return false;

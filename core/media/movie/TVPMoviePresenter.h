@@ -146,6 +146,12 @@ private:
     void ApplyVisibility();
     void PostEvent(bool complete);
     void DestroySprite();
+    // Mikage (GPL-3.0-or-later): adds or removes this presenter's continuous
+    // event hook. A stopped presenter (the reuse cache holds one after
+    // Close) needs no ticks, and while any hook is registered the engine's
+    // idle compact and TJS rehash never run.
+    void SetContinuousHook(bool hooked);
+    bool continuousHooked_ = false;
 
     tMode mode_;
     std::atomic<uint32_t> refCount_{1};
