@@ -160,9 +160,11 @@ int tTVPThread::StartProc(void* arg)
     // 实时媒体线程使用 user-interactive，其余使用 user-initiated；
     // 两者都低于主线程，避免线程被系统降频后轮询周期被拉长。
     {
-        static const char* const realtime[] = {"TVPVideoPlayer", "TVPVideoPlayerVideo",
-                                               "TVPVideoPlayerAudio", "TVPWaveSoundBufferThread",
-                                               "TVPTimerThread"};
+        // Mikage (GPL-3.0-or-later): "TVPMoviePlayer" is the decode thread of
+        // the rewritten movie player; the TVPVideoPlayer* names are the old one.
+        static const char* const realtime[] = {"TVPMoviePlayer", "TVPVideoPlayer",
+                                               "TVPVideoPlayerVideo", "TVPVideoPlayerAudio",
+                                               "TVPWaveSoundBufferThread", "TVPTimerThread"};
         qos_class_t qos = QOS_CLASS_USER_INITIATED;
         for (const char* n : realtime)
         {
