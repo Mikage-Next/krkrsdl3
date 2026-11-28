@@ -170,6 +170,7 @@ tjs_error tTVPFlutterTransHandler::EndProcess()
 //---------------------------------------------------------------------------
 tjs_error tTVPFlutterTransHandler::Process(tTVPDivisibleData *data)
 {
+	// Mikage (GPL-3.0-or-later): stays on the CPU; BackBuf is built from a full Src1 read on the first call.
 	tjs_int W = Width;
 	tjs_int H = Height;
 	tjs_int phase = Phase;

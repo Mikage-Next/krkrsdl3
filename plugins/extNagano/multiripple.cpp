@@ -10,6 +10,13 @@
 #include <stdlib.h>
 #include "multiripple.h"
 #include "common.h"
+#include "../extrans/metaltransition.h" // Mikage (GPL-3.0-or-later)
+#include <algorithm>
+#include <cstdint>
+#include <cstring>
+#include <memory>
+#include <new>
+#include <vector>
 
 //---------------------------------------------------------------------------
 // multiripple トランジション
@@ -211,6 +218,9 @@ protected:
 	tTVPMRDistMap    *DistMap;
 	tTVPMRDriftTable *DriftTable;
 	tTVPMRRipple     *Ripples;
+
+	// Mikage (GPL-3.0-or-later): immutable GPU copy of DistMap + DriftTable, built on first use.
+	std::shared_ptr<const TVPLayerTransitionBytes> GpuTable;
 
 public:
 	tTVPMultiRippleTransHandler(tjs_uint64 time, tjs_int width, tjs_int height,
@@ -431,6 +441,55 @@ tjs_error tTVPMultiRippleTransHandler::EndProcess()
 //---------------------------------------------------------------------------
 tjs_error tTVPMultiRippleTransHandler::Process(tTVPDivisibleData *data)
 {
+	// Mikage (GPL-3.0-or-later): try the Metal transition first. rand() is only used by the
+	// constructor (BuildRipples), so this path cannot change the rand() sequence.
+	if(TVPHasDivisibleMetalTransitionSupport(data))
+	{
+		TVPLayerTransitionOperation operation;
+		bool parametersReady = false;
+		try
+		{
+			if(!GpuTable)
+			{
+				const size_t area = (size_t)Width * (size_t)Height;
+				const size_t mapInts = (area * 2 + 3) / 4;
+				std::vector<std::int32_t> table(mapInts + (size_t)DriftTable->Len * 2, 0);
+				std::memcpy(table.data(), DistMap->Map, area * sizeof(tjs_uint16));
+				for(tjs_int i = 0; i < DriftTable->Len; i++)
+				{
+					table[mapInts + i] = DriftTable->A[i];
+					table[mapInts + DriftTable->Len + i] = DriftTable->B[i];
+				}
+				GpuTable = TVPMakeTransitionBytes(table.data(), table.size() * sizeof(table[0]));
+			}
+			auto &p = operation.params;
+			p.kind = static_cast<int>(TVPLayerTransitionKind::MultiRipple);
+			p.frameWidth = Width; p.frameHeight = Height; p.driftOffset = DriftTable->Len;
+			std::vector<std::int32_t> rows;
+			rows.push_back(0);
+			rows.push_back(FinishedCount * BlendUnit);
+			for(tjs_int i = 0; i < Count; i++)
+			{
+				const tTVPMRRipple &r = Ripples[i];
+				if(r.State != 1) continue;
+				rows[0]++;
+				rows.push_back(r.CenterX); rows.push_back(r.CenterY);
+				rows.push_back(r.Phase); rows.push_back(r.Drift);
+			}
+			operation.rows = TVPMakeTransitionBytes(rows.data(), rows.size() * sizeof(rows[0]));
+			operation.table = GpuTable; // same pointer and version every frame: backend cache hits
+			parametersReady = true;
+		}
+		catch(const std::bad_alloc &)
+		{
+			krkrsdl3::layer_work::RecordTransitionResult(false, "allocationFailed",
+				static_cast<uint64_t>(data->Width) * static_cast<uint64_t>(data->Height));
+		}
+		if(parametersReady &&
+		   TVPTryDivisibleMetalTransition(operation, data) == TVPLayerTransitionResult::Applied)
+			return TJS_S_OK;
+	}
+
 	// 縦方向の変位を伴うため、変位先の行 (y+vdisp) のスキャンラインを
 	// 遅延取得してキャッシュする。
 	const tjs_uint32 **s1rows = new const tjs_uint32*[Height];

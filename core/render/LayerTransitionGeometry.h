@@ -138,6 +138,40 @@ inline TVPLayerTransitionResult Validate(const TVPLayerTransitionOperation& op,
             if(lo<hi && (lo-p.offsetX<p.mapWidth || hi-p.offsetX>int64_t(p.mapWidth)+p.mapHeight))
                 return TVPLayerTransitionResult::InvalidParameters;
         }
+    } else if(p.kind==int(TVPLayerTransitionKind::Spin)) {
+        // Mikage (GPL-3.0-or-later): extNagano spin/multiripple checks.
+        if(tableBytes || rowsBytes!=size_t(p.width)*3*4) return TVPLayerTransitionResult::InvalidParameters;
+        const auto& rows=*op.rows;
+        const int64_t hc=p.frameHeight>>1;
+        const int64_t maxY=std::max<int64_t>(std::abs(int64_t(p.top)-hc),std::abs(int64_t(p.top)+p.height-1-hc));
+        for(int i=0;i<p.width;++i) {
+            const int sel=I32(rows,size_t(i)*3),col=I32(rows,size_t(i)*3+1),slope=I32(rows,size_t(i)*3+2);
+            if(sel<-1 || sel>1 || slope<-(1<<20) || slope>(1<<20) || int64_t(std::abs(slope))*maxY>INT32_MAX/2)
+                return TVPLayerTransitionResult::InvalidParameters;
+            if(sel>=0 && (col<0 || col>=p.frameWidth)) return TVPLayerTransitionResult::InvalidParameters;
+        }
+    } else if(p.kind==int(TVPLayerTransitionKind::MultiRipple)) {
+        const uint64_t map=(uint64_t(p.frameWidth)*p.frameHeight*2+3)/4;
+        if(p.driftOffset<1 || int64_t(p.frameWidth)*p.frameHeight>INT32_MAX/4 ||
+           tableBytes!=(map+uint64_t(p.driftOffset)*2)*4 || rowsBytes<8)
+            return TVPLayerTransitionResult::InvalidParameters;
+        const auto& rows=*op.rows;
+        const int count=I32(rows,0),base=I32(rows,1);
+        if(count<0 || count>20 || base<0 || base>(1<<20) || rowsBytes!=(2+size_t(count)*4)*4)
+            return TVPLayerTransitionResult::InvalidParameters;
+        for(int i=0;i<count;++i) {
+            const size_t r=2+size_t(i)*4;
+            const int cx=I32(rows,r),cy=I32(rows,r+1),phase=I32(rows,r+2),drift=I32(rows,r+3);
+            if(cx<0 || cx>=p.frameWidth || cy<0 || cy>=p.frameHeight || phase<0 || phase>(1<<28) ||
+               drift<0 || drift>255) return TVPLayerTransitionResult::InvalidParameters;
+        }
+        if(scanTable) {
+            // Wave/blend values are summed for up to 20 ripples; keep the sums inside int32.
+            for(size_t i=0;i<size_t(p.driftOffset)*2;++i) {
+                const int v=I32(*op.table,map+i);
+                if(v<-(1<<22) || v>(1<<22)) return TVPLayerTransitionResult::InvalidParameters;
+            }
+        }
     } else {
         if(rowsBytes!=size_t(p.frameHeight)*26*4) return TVPLayerTransitionResult::InvalidParameters;
         const auto& rows=*op.rows;

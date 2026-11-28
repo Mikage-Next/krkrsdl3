@@ -86,3 +86,9 @@ inline std::shared_ptr<const TVPLayerTransitionBytes> TVPMakeTransitionBytes(
 // mapWidth = first rule column kept, mapHeight = number of rule columns kept.
 // rows: height int32 edge widths, then height*mapHeight uint32 rule pixels
 // (row n, rule column mapWidth+k at index n*mapHeight+k).
+// spin: rows: 3*width int32 per Process column (source 0/1 or -1 for none, source
+// column, vertical slope in .8 fixed point). Rows map around frameHeight/2.
+// multiripple: table = frameWidth*frameHeight uint16 distances (padded to 4 bytes),
+// then driftOffset int32 wave offsets and driftOffset int32 blend values; the table
+// is immutable per handler. rows: int32 active count n (0..20), base blend, then n
+// records of 4 int32 centerX, centerY, phase, drift.

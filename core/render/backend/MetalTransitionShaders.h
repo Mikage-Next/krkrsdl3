@@ -133,6 +133,36 @@ uint transitionPixel(int x,int y,constant TransitionParams& p,
         }
         return rightFirst ? transitionRead(s2,x,y) : transitionRead(s1,x,y);
     }
+    if(p.kind==TVP_TRANSITION_Spin) {
+        int idx=3*(x-p.left),hc=p.frameHeight>>1;
+        if(rows[idx]<0) return 0u;
+        int srow=((rows[idx+2]*(y-hc))>>8)+hc;
+        if(srow<0 || srow>=p.frameHeight) return 0u;
+        return rows[idx]==0 ? transitionRead(s1,rows[idx+1],srow) : transitionRead(s2,rows[idx+1],srow);
+    }
+    if(p.kind==TVP_TRANSITION_MultiRipple) {
+        const device int* t=reinterpret_cast<const device int*>(table);
+        int area=p.frameWidth*p.frameHeight,len=p.driftOffset;
+        const device int* waves=t+(area*2+3)/4;
+        const device int* blends=waves+len;
+        int count=rows[0],blend=rows[1],vdisp=0;
+        for(int i=0;i<count;++i) {
+            const device int* r=rows+2+i*4;
+            int dx=x-r[0],dy=y-r[1];
+            if(dx<0) dx=-dx;
+            if(dy<0) dy=-dy;
+            int wc=r[2]-int(table[dy*p.frameWidth+dx]);
+            if(wc>=0) {
+                if(wc>=len) wc=len-1;
+                blend+=blends[wc];
+                vdisp-=(waves[wc]*r[3])>>8;
+            }
+        }
+        int row=clamp(y+vdisp,0,p.frameHeight-1);
+        uint a=transitionRead(s1,x,row),b=transitionRead(s2,x,row);
+        if((blend&0x100)!=0) { uint swap=a; a=b; b=swap; }
+        return transitionBlend(a,b,blend&255)|0xff000000u;
+    }
     // Rotations consume the software's fixed-point scanline plan, including
     // region order and Copy/StretchCopy/LinTransCopy byte coordinates.
     const device int* row=rows+y*26;

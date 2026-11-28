@@ -8,6 +8,12 @@
 #include "tjsConfig.h"
 #include "spin.h"
 #include "common.h"
+#include "../extrans/metaltransition.h" // Mikage (GPL-3.0-or-later)
+#include <algorithm>
+#include <cstdint>
+#include <memory>
+#include <new>
+#include <vector>
 #include <math.h>
 
 //---------------------------------------------------------------------------
@@ -295,6 +301,39 @@ tjs_error tTVPSpinFadeTransHandler::Process(tTVPDivisibleData *data)
 	const tjs_int hc   = H >> 1;          // 縦回転軸 = 画像中央
 	const tjs_int left = data->Left;
 	const tjs_int right= data->Left + data->Width;
+
+	// Mikage (GPL-3.0-or-later): the column tables are built on the CPU in StartProcess; the GPU
+	// only samples with them. Try the Metal transition first, the CPU loop below is unchanged.
+	if(left >= 0 && right <= Width && TVPHasDivisibleMetalTransitionSupport(data))
+	{
+		TVPLayerTransitionOperation operation;
+		bool parametersReady = false;
+		try
+		{
+			auto &p = operation.params;
+			p.kind = static_cast<int>(TVPLayerTransitionKind::Spin);
+			p.frameWidth = Width; p.frameHeight = Height;
+			std::vector<std::int32_t> rows(size_t(data->Width) * 3);
+			for(tjs_int c = left; c < right; c++)
+			{
+				const size_t i = size_t(c - left) * 3;
+				const tjs_int sel = Select[c];
+				rows[i] = sel;
+				rows[i + 1] = sel == 1 ? Col2[c] : Col1[c];
+				rows[i + 2] = sel == 1 ? Slope2[c] : Slope1[c];
+			}
+			operation.rows = TVPMakeTransitionBytes(rows.data(), rows.size() * sizeof(rows[0]));
+			parametersReady = true;
+		}
+		catch(const std::bad_alloc &)
+		{
+			krkrsdl3::layer_work::RecordTransitionResult(false, "allocationFailed",
+				static_cast<uint64_t>(data->Width) * static_cast<uint64_t>(data->Height));
+		}
+		if(parametersReady &&
+		   TVPTryDivisibleMetalTransition(operation, data) == TVPLayerTransitionResult::Applied)
+			return TJS_S_OK;
+	}
 
 	for(tjs_int n = 0; n < data->Height; n++)
 	{

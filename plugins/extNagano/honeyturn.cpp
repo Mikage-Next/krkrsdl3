@@ -295,6 +295,7 @@ tjs_error tTVPHoneyTurnTransHandler::EndProcess()
 //---------------------------------------------------------------------------
 tjs_error tTVPHoneyTurnTransHandler::Process(tTVPDivisibleData *data)
 {
+	// Mikage (GPL-3.0-or-later): stays on the CPU; its per-pixel math is double precision, which Metal cannot match.
 	// FUN_10006af0 相当。
 	// data->Left,Top,Width,Height の矩形についてのみ転送する。
 	// 元コードは per-pixel Map(offset 0x120) と PhaseTable(0x20) を参照して
