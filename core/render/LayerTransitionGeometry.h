@@ -172,6 +172,10 @@ inline TVPLayerTransitionResult Validate(const TVPLayerTransitionOperation& op,
                 if(v<-(1<<22) || v>(1<<22)) return TVPLayerTransitionResult::InvalidParameters;
             }
         }
+    } else if(p.kind==int(TVPLayerTransitionKind::Book)) {
+        // Mikage (GPL-3.0-or-later): extNagano book check.
+        if(tableBytes || rowsBytes || p.flags>1 || p.phase<1 || p.phase>=p.frameWidth/2 ||
+           p.blockSize<0 || p.blockSize>256) return TVPLayerTransitionResult::InvalidParameters;
     } else {
         if(rowsBytes!=size_t(p.frameHeight)*26*4) return TVPLayerTransitionResult::InvalidParameters;
         const auto& rows=*op.rows;

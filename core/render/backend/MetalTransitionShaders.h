@@ -31,6 +31,25 @@ uint transitionBlend(uint a,uint b,int ratio) {
     }
     return result;
 }
+// Mikage (GPL-3.0-or-later): extNagano book shading helpers (same integer math as book.cpp).
+uint bookDarken(uint c,uint f) {
+    uint t=c&0x0000ffu,r=(t-((t*f)>>8))&0x0000ffu;
+    t=c&0x00ff00u; r|=(t-((t*f)>>8))&0x00ff00u;
+    t=c&0xff0000u; r|=(t-((t*f)>>8))&0xff0000u;
+    return r|(c&0xff000000u);
+}
+uint bookLighten(uint c,uint f) {
+    uint t=c&0x0000ffu,r=((((0x0000ffu-t)*f)>>8)+t)&0x0000ffu;
+    t=c&0x00ff00u; r|=((((0x00ff00u-t)*f)>>8)+t)&0x00ff00u;
+    t=c&0xff0000u; r|=((((0xff0000u-t)*f)>>8)+t)&0xff0000u;
+    return r|(c&0xff000000u);
+}
+uint bookBlend(uint a,uint b,uint alpha) {
+    uint ta=a&0x0000ffu,tb=b&0x0000ffu,r=((((tb-ta)*alpha)>>8)+ta)&0x0000ffu;
+    ta=a&0x00ff00u; tb=b&0x00ff00u; r|=((((tb-ta)*alpha)>>8)+ta)&0x00ff00u;
+    ta=a&0xff0000u; tb=b&0xff0000u; r|=((((tb-ta)*alpha)>>8)+ta)&0xff0000u;
+    return r;
+}
 uint transitionPixel(int x,int y,constant TransitionParams& p,
     const device int* rows,const device ushort* table,const device uchar* alpha,
     texture2d<float,access::read> s1,texture2d<float,access::read> s2) {
@@ -162,6 +181,56 @@ uint transitionPixel(int x,int y,constant TransitionParams& p,
         uint a=transitionRead(s1,x,row),b=transitionRead(s2,x,row);
         if((blend&0x100)!=0) { uint swap=a; a=b; b=swap; }
         return transitionBlend(a,b,blend&255)|0xff000000u;
+    }
+    if(p.kind==TVP_TRANSITION_Book) {
+        int W=p.frameWidth,P=p.phase,Q=p.blockSize,c=x;
+        int minp=P<16 ? P : 16,hg=Q/2;
+        uint v1=transitionRead(s1,x,y),keep=v1&0xff000000u;
+        int b1,b2,b3,b4,f,sc;
+        if(p.flags==0u) { // right-to-left: source 1 stays on the left
+            b1=clamp(W-2*P-minp,0,W); b2=clamp(W-2*P,0,W); b3=clamp(W-(3*P)/2,0,W); b4=clamp(W-P,0,W);
+            if(c<b1) return v1;
+            if(c<b2) {
+                f=minp>0 ? ((((c-b2)+minp)*Q)/minp)/2 : 0;
+                if(f<0) f=0;
+                return bookDarken(v1,uint(f));
+            }
+            if(c<b4) {
+                bool light=c<b3;
+                f=light ? ((b3-c)*Q*2)/P : (((c-b4)*2+P)*Q)/P;
+                if(f<0) f=0;
+                sc=c+(2*P-W);
+                uint v2=(sc>=0 && sc<W) ? transitionRead(s2,sc,y) : 0u;
+                uint a=bookDarken(v1,uint(hg));
+                uint b=light ? bookLighten(v2,uint(f)) : bookDarken(v2,uint(f));
+                return bookBlend(a,b,v2>>24)|keep;
+            }
+            f=((W-c)*Q)/P;
+            if(f<0) f=0;
+            return bookDarken(transitionRead(s2,x,y),uint(f));
+        }
+        b1=clamp(P,0,W); b2=clamp((3*P)/2,0,W); b3=clamp(2*P,0,W); b4=clamp(2*P+minp,0,W);
+        if(c<b1) {
+            f=((b1-c)*Q)/P;
+            if(f<0) f=0;
+            return bookDarken(transitionRead(s2,x,y),uint(f));
+        }
+        if(c<b3) {
+            bool dark=c<b2;
+            f=dark ? ((b2-c)*Q*2)/P : ((P/2+(c-b3)*2)*Q)/P;
+            if(f<0) f=0;
+            sc=c+(W-2*P);
+            uint v2=(sc>=0 && sc<W) ? transitionRead(s2,sc,y) : 0u;
+            uint a=bookDarken(v1,uint(hg));
+            uint b=dark ? bookDarken(v2,uint(f)) : bookLighten(v2,uint(f));
+            return bookBlend(a,b,v2>>24)|keep;
+        }
+        if(c<b4) {
+            f=minp>0 ? (((b4-c)*Q)/minp)/2 : 0;
+            if(f<0) f=0;
+            return bookDarken(v1,uint(f));
+        }
+        return v1;
     }
     // Rotations consume the software's fixed-point scanline plan, including
     // region order and Copy/StretchCopy/LinTransCopy byte coordinates.

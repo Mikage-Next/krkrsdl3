@@ -235,6 +235,7 @@ void tTVPMorphingTransHandler::RasterizePatch(tTVPDivisibleData *data, tjs_int i
 //---------------------------------------------------------------------------
 tjs_error tTVPMorphingTransHandler::Process(tTVPDivisibleData *data)
 {
+	// Mikage (GPL-3.0-or-later): stays on the CPU; patches overwrite each other in order and sample with double barycentric maths that Metal cannot match.
 	// 端点は単純コピー (元 FUN_10008010: alpha==0 は src1, ==0xff は src2)
 	if(Alpha == 0 || Alpha == 255)
 	{

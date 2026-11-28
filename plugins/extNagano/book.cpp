@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include "book.h"
 #include "common.h"
+#include "../extrans/metaltransition.h" // Mikage (GPL-3.0-or-later)
 
 //---------------------------------------------------------------------------
 // book トランジション
@@ -192,6 +193,22 @@ tjs_error tTVPBookTransHandler::Process(tTVPDivisibleData *data)
 		data->DestLeft = data->Src2Left;
 		data->DestTop  = data->Src2Top;
 		return TJS_S_OK;
+	}
+
+	// Mikage (GPL-3.0-or-later): try the Metal transition first; the CPU code below is unchanged.
+	// Q is computed here on the CPU exactly as PaintLineRL/LR do. rand() is only used by the
+	// provider's dir selection, never in Process.
+	if(TVPHasDivisibleMetalTransitionSupport(data))
+	{
+		TVPLayerTransitionOperation operation;
+		auto &p = operation.params;
+		p.kind = static_cast<int>(TVPLayerTransitionKind::Book);
+		p.frameWidth = Width; p.frameHeight = Height; p.phase = Phase; p.flags = Dir == 0 ? 0u : 1u;
+		tjs_int A = ((((Width / 2) - Phase) << 16) / Width) / 2;
+		if(A < 0) A = 0;
+		p.blockSize = (tjs_int)(sqrt((double)A) + 0.5);
+		if(TVPTryDivisibleMetalTransition(operation, data) == TVPLayerTransitionResult::Applied)
+			return TJS_S_OK;
 	}
 
 	// 折り目を描画する

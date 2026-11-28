@@ -523,6 +523,7 @@ tjs_error tTVP3duniversalTransHandler::EndProcess()
 //---------------------------------------------------------------------------
 tjs_error tTVP3duniversalTransHandler::Process(tTVPDivisibleData *data)
 {
+	// Mikage (GPL-3.0-or-later): stays on the CPU; it scatters pixels into a persistent OutBuf in write order, so a pixel depends on earlier writes.
 	// FUN_100015f0
 	if(!OutBuf) return TJS_E_FAIL;
 

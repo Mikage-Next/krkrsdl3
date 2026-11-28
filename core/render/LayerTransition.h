@@ -92,3 +92,5 @@ inline std::shared_ptr<const TVPLayerTransitionBytes> TVPMakeTransitionBytes(
 // then driftOffset int32 wave offsets and driftOffset int32 blend values; the table
 // is immutable per handler. rows: int32 active count n (0..20), base blend, then n
 // records of 4 int32 centerX, centerY, phase, drift.
+// book: frameWidth = width, phase = fold position (1 .. width/2-1), blockSize = fold
+// shade Q computed on the CPU, flags = 0 right-to-left page, 1 left-to-right. No buffers.
