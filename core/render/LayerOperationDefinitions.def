@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Written for Mikage (https://github.com/Mikage-Next/krkrsdl3); see MIKAGE-NOTICE.md.
 // Stable ordinary Layer wire/shader/diagnostic IDs. Append new operations;
 // never renumber existing rows. This file is intentionally multiply included.
 // name, ID, logical input-count mask, backend input count, source formats,
