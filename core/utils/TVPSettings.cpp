@@ -353,11 +353,13 @@ bool TVPParseArguments(int argc, char* argv[])
     }
     TVPAddImportantLog(TVPFormatMessage("(info) Savedata path : %1", TVPDataPath));
 
-    // set log output directory
-    TVPSetLogLocation(TVPNativeDataPath);
-
     // args 
     TVPInitProgramArguments(argc, argv);
+
+    // set log output directory
+    // Mikage (GPL-3.0-or-later): after the arguments, which it reads
+    // (-forcelog, -logerror); before, both were silently ignored.
+    TVPSetLogLocation(TVPNativeDataPath);
     TVPDumpOptions();
 
     // check CPU type
