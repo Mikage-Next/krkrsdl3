@@ -36,7 +36,10 @@ namespace krkrsdl3
 namespace
 {
 
-constexpr int kIOBufferSize = 4096;
+// Mikage (GPL-3.0-or-later): 32 KB like wuffmpeg. With 4 KB, probing and
+// avformat_find_stream_info called back into the archive stream many
+// times more on every open.
+constexpr int kIOBufferSize = 32 * 1024;
 
 //---------------------------------------------------------------------------
 // 中立类型 ↔ FFmpeg 的映射
