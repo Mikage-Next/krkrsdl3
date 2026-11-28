@@ -105,6 +105,39 @@ inline TVPLayerTransitionResult Validate(const TVPLayerTransitionOperation& op,
             const int gloss=I32(table,64*64*8+phase);
             if(gloss<0 || gloss>255) return TVPLayerTransitionResult::InvalidParameters;
         }
+    } else if(p.kind==int(TVPLayerTransitionKind::ScanLine)) {
+        // Mikage (GPL-3.0-or-later): extNagano transition checks.
+        if(tableBytes || rowsBytes || p.offsetX<0 || p.offsetX>p.frameWidth)
+            return TVPLayerTransitionResult::InvalidParameters;
+    } else if(p.kind==int(TVPLayerTransitionKind::RGBFade) || p.kind==int(TVPLayerTransitionKind::BlurFade)) {
+        if(tableBytes || rowsBytes || p.flags>2) return TVPLayerTransitionResult::InvalidParameters;
+    } else if(p.kind==int(TVPLayerTransitionKind::ZoomFade)) {
+        if(tableBytes || rowsBytes!=(size_t(p.height)*2+size_t(p.width)*2)*4)
+            return TVPLayerTransitionResult::InvalidParameters;
+        const auto& rows=*op.rows;
+        for(int i=0;i<p.height*2;++i) {
+            const int32_t v=I32(rows,i);
+            if(v<0 || v>=p.frameHeight) return TVPLayerTransitionResult::InvalidParameters;
+        }
+        for(int i=0;i<p.width*2;++i) {
+            const int32_t v=I32(rows,size_t(p.height)*2+i);
+            if(v<0 || v>=p.frameWidth) return TVPLayerTransitionResult::InvalidParameters;
+        }
+    } else if(p.kind==int(TVPLayerTransitionKind::ImageWipe)) {
+        constexpr int Limit=1<<28;
+        if(tableBytes || p.flags>1 || p.blockSize<0 || p.blockSize>Limit || p.mapWidth<0 || p.mapHeight<0 ||
+           int64_t(p.mapWidth)+p.mapHeight>p.blockSize || p.offsetX<-Limit || p.offsetX>Limit ||
+           rowsBytes!=(uint64_t(p.height)+uint64_t(p.height)*uint64_t(p.mapHeight))*4)
+            return TVPLayerTransitionResult::InvalidParameters;
+        const auto& rows=*op.rows;
+        for(int n=0;n<p.height;++n) {
+            const int edge=I32(rows,n);
+            if(edge<0 || edge>p.blockSize) return TVPLayerTransitionResult::InvalidParameters;
+            // Rule columns read by the band must lie inside the kept columns.
+            const int64_t lo=std::max<int64_t>(p.left,p.offsetX),hi=std::min<int64_t>(int64_t(p.left)+p.width,int64_t(p.offsetX)+edge);
+            if(lo<hi && (lo-p.offsetX<p.mapWidth || hi-p.offsetX>int64_t(p.mapWidth)+p.mapHeight))
+                return TVPLayerTransitionResult::InvalidParameters;
+        }
     } else {
         if(rowsBytes!=size_t(p.frameHeight)*26*4) return TVPLayerTransitionResult::InvalidParameters;
         const auto& rows=*op.rows;

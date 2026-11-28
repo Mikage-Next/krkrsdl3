@@ -8,6 +8,11 @@
 #include "tjsConfig.h"
 #include "blurfade.h"
 #include "common.h"
+#include "../extrans/metaltransition.h" // Mikage (GPL-3.0-or-later)
+#include <algorithm>
+#include <cstdint>
+#include <new>
+#include <vector>
 #include <math.h>
 
 //---------------------------------------------------------------------------
@@ -341,6 +346,24 @@ tjs_error tTVPBlurFadeTransHandler::EndProcess()
 //---------------------------------------------------------------------------
 tjs_error tTVPBlurFadeTransHandler::Process(tTVPDivisibleData *data)
 {
+	// Mikage (GPL-3.0-or-later): the box/bilinear blur is a two-pass filter, so it stays on the
+	// CPU. Frames that show a source unblurred (alpha 0/255 or no blur amount) are a plain
+	// per-pixel blend and try the Metal transition first.
+	if(Alpha == 0 || Alpha == 255 ||
+	   !(CurBlur1x > 0 || CurBlur1y > 0 || CurBlur2x > 0 || CurBlur2y > 0))
+	{
+		if(TVPHasDivisibleMetalTransitionSupport(data))
+		{
+			TVPLayerTransitionOperation operation;
+			auto &p = operation.params;
+			p.kind = static_cast<int>(TVPLayerTransitionKind::BlurFade);
+			p.frameWidth = Width; p.frameHeight = Height; p.ratio = Alpha;
+			p.flags = Alpha == 0 ? 1u : Alpha == 255 ? 2u : 0u;
+			if(TVPTryDivisibleMetalTransition(operation, data) == TVPLayerTransitionResult::Applied)
+				return TJS_S_OK;
+		}
+	}
+
 	// FUN_10003800
 	tjs_int left  = data->Left;
 	tjs_int right = data->Left + data->Width;

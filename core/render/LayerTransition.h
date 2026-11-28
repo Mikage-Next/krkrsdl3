@@ -75,3 +75,14 @@ inline std::shared_ptr<const TVPLayerTransitionBytes> TVPMakeTransitionBytes(
 // the complete uint16 drift lookup table. driftOffset indexes table uint16s.
 // rotate rows: frameHeight records of 26 int32: count, src1[5], src2[5],
 // region[5][3]. Lines use start,sx,sy,stepx,stepy; regions left,right,type.
+// extNagano kinds (parameters reuse the uniform fields):
+// scanline: offsetX = slide position (0..frameWidth). No buffers.
+// rgbfade: flags 0 per-channel blend, 1 copy source 1, 2 copy source 2;
+// color = opaA<<24 | opaR<<16 | opaG<<8 | opaB. No buffers.
+// blurfade: flags 0 blend by ratio, 1 copy source 1, 2 copy source 2. No buffers.
+// zoomfade: ratio = phase. rows: 2*height int32 (src1 row, src2 row per Process
+// row), then 2*width int32 (src1 column, src2 column per Process column).
+// imagewipe: offsetX = threshold, flags = dir != 0, blockSize = rule width,
+// mapWidth = first rule column kept, mapHeight = number of rule columns kept.
+// rows: height int32 edge widths, then height*mapHeight uint32 rule pixels
+// (row n, rule column mapWidth+k at index n*mapHeight+k).

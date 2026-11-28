@@ -8,6 +8,11 @@
 #include "tjsConfig.h"
 #include "imagewipe.h"
 #include "common.h"
+#include "../extrans/metaltransition.h" // Mikage (GPL-3.0-or-later)
+#include <algorithm>
+#include <cstdint>
+#include <new>
+#include <vector>
 
 //---------------------------------------------------------------------------
 // imagewipe トランジション
@@ -265,6 +270,59 @@ tjs_error tTVPImageWipeTransHandler::Process(tTVPDivisibleData *data)
 	const tjs_int th = Threshold;
 	const tjs_int left  = data->Left;
 	const tjs_int right = data->Left + data->Width;
+
+	// Mikage (GPL-3.0-or-later): try the Metal transition first; the CPU loop below is unchanged.
+	// Only the rule columns the band can touch are copied; the GPU never calls back into Rule.
+	if(Rule && data->Height > 0 && data->Top >= 0 && data->Top + data->Height <= Height &&
+	   TVPHasDivisibleMetalTransitionSupport(data))
+	{
+		TVPLayerTransitionOperation operation;
+		bool parametersReady = false;
+		try
+		{
+			// Rule columns [colBase, colEnd) cover every band pixel of this rectangle.
+			const tjs_int64 base64 = std::max<tjs_int64>(0, (tjs_int64)left - th);
+			const tjs_int64 end64 = std::min<tjs_int64>(RuleWidth, (tjs_int64)right - th);
+			const tjs_int colBase = (tjs_int)std::min<tjs_int64>(base64, RuleWidth);
+			const tjs_int colCount = end64 > base64 ? (tjs_int)(end64 - colBase) : 0;
+			auto &p = operation.params;
+			p.kind = static_cast<int>(TVPLayerTransitionKind::ImageWipe);
+			p.frameWidth = Width; p.frameHeight = Height;
+			p.flags = Dir != 0 ? 1u : 0u;
+			p.offsetX = th; p.blockSize = RuleWidth; p.mapWidth = colBase; p.mapHeight = colCount;
+			std::vector<std::int32_t> rows(size_t(data->Height) * (1 + size_t(colCount)));
+			bool ok = true;
+			for(tjs_int n = 0; n < data->Height && ok; n++)
+			{
+				tjs_int y = data->Top + n;
+				tjs_int edge = RuleEdge[y];
+				rows[n] = edge;
+				tjs_int lo = std::max(left, th), hi = std::min(right, th + edge);
+				if(lo >= hi) continue; // no band pixel on this row
+				tjs_int rrow = y;
+				if(RuleHeight > 0 && rrow >= RuleHeight) rrow = RuleHeight - 1;
+				if(rrow < 0) rrow = 0;
+				const tjs_uint32 *rule = NULL;
+				if(TJS_FAILED(Rule->GetScanLine(rrow, (const void**)&rule)) || !rule) { ok = false; break; }
+				// The band reads rule[c - th] for c in [lo, hi); hi - th <= edge <= RuleWidth.
+				for(tjs_int c = lo; c < hi; c++)
+					rows[size_t(data->Height) + size_t(n) * colCount + (c - th - colBase)] = (std::int32_t)rule[c - th];
+			}
+			if(ok)
+			{
+				operation.rows = TVPMakeTransitionBytes(rows.data(), rows.size() * sizeof(rows[0]));
+				parametersReady = true;
+			}
+		}
+		catch(const std::bad_alloc &)
+		{
+			krkrsdl3::layer_work::RecordTransitionResult(false, "allocationFailed",
+				static_cast<uint64_t>(data->Width) * static_cast<uint64_t>(data->Height));
+		}
+		if(parametersReady &&
+		   TVPTryDivisibleMetalTransition(operation, data) == TVPLayerTransitionResult::Applied)
+			return TJS_S_OK;
+	}
 
 	for(tjs_int n = 0; n < data->Height; n++)
 	{

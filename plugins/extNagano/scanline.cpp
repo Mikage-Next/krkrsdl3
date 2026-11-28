@@ -8,6 +8,11 @@
 #include "tjsConfig.h"
 #include "scanline.h"
 #include "common.h"
+#include "../extrans/metaltransition.h" // Mikage (GPL-3.0-or-later)
+#include <algorithm>
+#include <cstdint>
+#include <new>
+#include <vector>
 
 //---------------------------------------------------------------------------
 // scanline トランジション
@@ -79,6 +84,17 @@ tjs_error tTVPScanLineTransHandler::EndProcess()
 //---------------------------------------------------------------------------
 tjs_error tTVPScanLineTransHandler::Process(tTVPDivisibleData *data)
 {
+	// Mikage (GPL-3.0-or-later): try the Metal transition first; the CPU code below is unchanged.
+	if(TVPHasDivisibleMetalTransitionSupport(data))
+	{
+		TVPLayerTransitionOperation operation;
+		auto &p = operation.params;
+		p.kind = static_cast<int>(TVPLayerTransitionKind::ScanLine);
+		p.frameWidth = Width; p.frameHeight = Height; p.offsetX = CurPos;
+		if(TVPTryDivisibleMetalTransition(operation, data) == TVPLayerTransitionResult::Applied)
+			return TJS_S_OK;
+	}
+
 	tjs_int pos = CurPos;
 	tjs_int w   = Width;
 	tjs_int left  = data->Left;

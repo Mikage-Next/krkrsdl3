@@ -8,6 +8,11 @@
 #include "tjsConfig.h"
 #include "rgbfade.h"
 #include "common.h"
+#include "../extrans/metaltransition.h" // Mikage (GPL-3.0-or-later)
+#include <algorithm>
+#include <cstdint>
+#include <new>
+#include <vector>
 
 //---------------------------------------------------------------------------
 // rgbfade トランジション
@@ -138,6 +143,20 @@ tjs_error tTVPRGBFadeTransHandler::EndProcess()
 //---------------------------------------------------------------------------
 tjs_error tTVPRGBFadeTransHandler::Process(tTVPDivisibleData *data)
 {
+	// Mikage (GPL-3.0-or-later): try the Metal transition first; the CPU code below is unchanged.
+	if(TVPHasDivisibleMetalTransitionSupport(data))
+	{
+		TVPLayerTransitionOperation operation;
+		auto &p = operation.params;
+		p.kind = static_cast<int>(TVPLayerTransitionKind::RGBFade);
+		p.frameWidth = Width; p.frameHeight = Height;
+		p.flags = CurElapsed == 0 ? 1u : CurElapsed == Time ? 2u : 0u;
+		p.color = ((tjs_uint32)OpaA << 24) | ((tjs_uint32)OpaR << 16) |
+		          ((tjs_uint32)OpaG << 8) | (tjs_uint32)OpaB;
+		if(TVPTryDivisibleMetalTransition(operation, data) == TVPLayerTransitionResult::Applied)
+			return TJS_S_OK;
+	}
+
 	// FUN_10017110
 	tjs_int left  = data->Left;
 	tjs_int right = data->Left + data->Width;

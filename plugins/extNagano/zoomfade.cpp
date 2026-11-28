@@ -8,6 +8,11 @@
 #include "tjsConfig.h"
 #include "zoomfade.h"
 #include "common.h"
+#include "../extrans/metaltransition.h" // Mikage (GPL-3.0-or-later)
+#include <algorithm>
+#include <cstdint>
+#include <new>
+#include <vector>
 
 //---------------------------------------------------------------------------
 // zoomfade トランジション
@@ -166,6 +171,42 @@ tjs_error tTVPZoomFadeTransHandler::Process(tTVPDivisibleData *data)
 		tjs_int xd = (tjs_int)(cx + (c - cx) * invD);
 		XMap1[idx] = ClampI(xs, 0, W - 1);
 		XMap2[idx] = ClampI(xd, 0, W - 1);
+	}
+
+	// Mikage (GPL-3.0-or-later): the double-precision maps above are built on the CPU; the GPU
+	// only samples with them. Try the Metal transition first, the CPU loop below is unchanged.
+	if(data->Width <= W && TVPHasDivisibleMetalTransitionSupport(data))
+	{
+		TVPLayerTransitionOperation operation;
+		bool parametersReady = false;
+		try
+		{
+			auto &p = operation.params;
+			p.kind = static_cast<int>(TVPLayerTransitionKind::ZoomFade);
+			p.frameWidth = W; p.frameHeight = H; p.ratio = phase;
+			std::vector<std::int32_t> rows(size_t(data->Height) * 2 + size_t(data->Width) * 2);
+			for(tjs_int n = 0; n < data->Height; n++)
+			{
+				tjs_int outY = data->Top + n;
+				rows[size_t(n) * 2]     = ClampI((tjs_int)(cy + (outY - cy) * invS), 0, H - 1);
+				rows[size_t(n) * 2 + 1] = ClampI((tjs_int)(cy + (outY - cy) * invD), 0, H - 1);
+			}
+			for(tjs_int idx = 0; idx < data->Width; idx++)
+			{
+				rows[size_t(data->Height) * 2 + size_t(idx) * 2]     = XMap1[idx];
+				rows[size_t(data->Height) * 2 + size_t(idx) * 2 + 1] = XMap2[idx];
+			}
+			operation.rows = TVPMakeTransitionBytes(rows.data(), rows.size() * sizeof(rows[0]));
+			parametersReady = true;
+		}
+		catch(const std::bad_alloc &)
+		{
+			krkrsdl3::layer_work::RecordTransitionResult(false, "allocationFailed",
+				static_cast<uint64_t>(data->Width) * static_cast<uint64_t>(data->Height));
+		}
+		if(parametersReady &&
+		   TVPTryDivisibleMetalTransition(operation, data) == TVPLayerTransitionResult::Applied)
+			return TJS_S_OK;
 	}
 
 	// --- 行ごとに合成 ---------------------------------------------------

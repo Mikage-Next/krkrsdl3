@@ -77,6 +77,62 @@ uint transitionPixel(int x,int y,constant TransitionParams& p,
         int gloss=t[64*64*8+phase];
         return gloss ? transitionBlend(value,0x00ffffffu,gloss) : value;
     }
+    // Mikage (GPL-3.0-or-later): extNagano kinds; same integer math as the plugin CPU code.
+    if(p.kind==TVP_TRANSITION_ScanLine) {
+        int pos=p.offsetX,w=p.frameWidth;
+        if((y&1)==0) return x<pos ? transitionRead(s2,x+(w-pos),y) : transitionRead(s1,x-pos,y);
+        return x<w-pos ? transitionRead(s1,x+pos,y) : transitionRead(s2,x-(w-pos),y);
+    }
+    if(p.kind==TVP_TRANSITION_RGBFade) {
+        if(p.flags==1u) return transitionRead(s1,x,y);
+        if(p.flags==2u) return transitionRead(s2,x,y);
+        uint a=transitionRead(s1,x,y),b=transitionRead(s2,x,y);
+        int opaB=int(p.color&255u),opaG=int((p.color>>8)&255u),opaR=int((p.color>>16)&255u),opaA=int(p.color>>24);
+        int s1b=int(a&255u),s1g=int((a>>8)&255u),s1r=int((a>>16)&255u),s1a=int(a>>24);
+        int s2b=int(b&255u),s2g=int((b>>8)&255u),s2r=int((b>>16)&255u),s2a=int(b>>24);
+        int db,dg,dr,da;
+        if(s2a==0) {
+            db=(s1b*opaB)&255; dg=(s1g*opaG)&255; dr=(s1r*opaR)&255;
+            da=s1a-((s1a*opaA)>>8);
+        } else if(s1a==0) {
+            db=(s1b*opaB)&255; dg=(s1g*opaG)&255; dr=(s1r*opaR)&255;
+            da=(s2a*opaA)>>8;
+        } else {
+            db=s1b+(((s2b-s1b)*opaB)>>8); dg=s1g+(((s2g-s1g)*opaG)>>8);
+            dr=s1r+(((s2r-s1r)*opaR)>>8); da=s1a+(((s2a-s1a)*opaA)>>8);
+        }
+        return (uint(da&255)<<24)|(uint(dr&255)<<16)|(uint(dg&255)<<8)|uint(db&255);
+    }
+    if(p.kind==TVP_TRANSITION_BlurFade) {
+        uint a=transitionRead(s1,x,y);
+        if(p.flags==1u) return a;
+        uint b=transitionRead(s2,x,y);
+        if(p.flags==2u) return b;
+        return transitionBlend(a,b,p.ratio);
+    }
+    if(p.kind==TVP_TRANSITION_ZoomFade) {
+        int idx=2*(y-p.top),col=2*p.height+2*(x-p.left);
+        uint a=transitionRead(s1,rows[col],rows[idx]),b=transitionRead(s2,rows[col+1],rows[idx+1]);
+        uint s1a=a>>24,s2a=b>>24,phase=uint(p.ratio);
+        if(s2a==0u) return (a&0x00ffffffu)|(((s1a*(255u-phase))>>8)<<24);
+        if(s1a==0u) return (b&0x00ffffffu)|(((s2a*phase)>>8)<<24);
+        return transitionBlend(a,b,p.ratio);
+    }
+    if(p.kind==TVP_TRANSITION_ImageWipe) {
+        int row=y-p.top,th=p.offsetX,edge=rows[row];
+        bool rightFirst=p.flags!=0u; // dir!=0: left region shows source 1
+        if(x<th) return rightFirst ? transitionRead(s1,x,y) : transitionRead(s2,x,y);
+        if(x<th+edge) {
+            uint base=rightFirst ? transitionRead(s1,x,y) : transitionRead(s2,x,y);
+            int rcol=x-th;
+            if(rcol<p.blockSize && rcol>=p.mapWidth && rcol<p.mapWidth+p.mapHeight) {
+                uint rp=uint(rows[p.height+row*p.mapHeight+(rcol-p.mapWidth)]);
+                return transitionBlend(base,rp,int(rp>>24));
+            }
+            return base;
+        }
+        return rightFirst ? transitionRead(s2,x,y) : transitionRead(s1,x,y);
+    }
     // Rotations consume the software's fixed-point scanline plan, including
     // region order and Copy/StretchCopy/LinTransCopy byte coordinates.
     const device int* row=rows+y*26;
