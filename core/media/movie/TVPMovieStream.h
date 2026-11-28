@@ -122,6 +122,12 @@ struct tTVPMovieFrame
     int height = 0;
     int displayWidth = 0; // 去掉黑边后的显示尺寸
     int displayHeight = 0;
+    // Mikage (GPL-3.0-or-later): YUV colour description. nativeFormat is the
+    // decoder's own pixel format (AVPixelFormat for FFmpeg, -1 if none), so a
+    // converter can handle formats without a tTVPPixelFormat (P010, 10-bit).
+    int nativeFormat = -1;
+    tTVPColorMatrix colorMatrix = tTVPColorMatrix::BT601;
+    bool fullRange = false;
 
     // 音频：交错或分平面的原始采样
     tTVPSampleFormat sampleFormat = tTVPSampleFormat::Unknown;
@@ -143,6 +149,9 @@ struct tTVPMovieFrame
             strides[i] = 0;
         }
         width = height = displayWidth = displayHeight = 0;
+        nativeFormat = -1;
+        colorMatrix = tTVPColorMatrix::BT601;
+        fullRange = false;
         sampleFormat = tTVPSampleFormat::Unknown;
         for (int i = 0; i < 8; ++i)
             samples[i] = nullptr;

@@ -14,25 +14,58 @@ namespace
 
 std::atomic<tTVPFrameConverter> gConverter{nullptr};
 
-// BT.601 有限范围转全范围 RGBA 的定点系数。
-// 用整数运算，避免在没有 sws 的构建里引入浮点开销。
+// YUV 转全范围 RGBA 用整数运算，避免在没有 sws 的构建里引入浮点开销。
 inline uint8_t Clamp8(int value)
 {
     return static_cast<uint8_t>(value < 0 ? 0 : (value > 255 ? 255 : value));
 }
 
+// Mikage (GPL-3.0-or-later): coefficients for every matrix and range, in
+// 16.16 fixed point. The old table mixed limited-range luma with full-range
+// chroma factors (1.402/1.772), which undersaturated every frame.
 struct tYuvCoeffs
 {
     int yOffset;
+    int yScale;
     int rv;
     int gu;
     int gv;
     int bu;
-    int shift;
 };
 
-// BT.601 limited range: Y' = 16..235, C = 16..240
-constexpr tYuvCoeffs kBT601 = {16, 359, -88, -183, 454, 8};
+constexpr int kYuvShift = 16;
+
+constexpr int Fixed(double value)
+{
+    return static_cast<int>(value * (1 << kYuvShift) + (value < 0 ? -0.5 : 0.5));
+}
+
+constexpr tYuvCoeffs MakeYuvCoeffs(double kr, double kb, bool fullRange)
+{
+    const double kg = 1.0 - kr - kb;
+    const double ys = fullRange ? 1.0 : 255.0 / 219.0;
+    const double cs = fullRange ? 1.0 : 255.0 / 224.0;
+    return {fullRange ? 0 : 16,
+            Fixed(ys),
+            Fixed(2.0 * (1.0 - kr) * cs),
+            Fixed(-2.0 * (1.0 - kb) * kb / kg * cs),
+            Fixed(-2.0 * (1.0 - kr) * kr / kg * cs),
+            Fixed(2.0 * (1.0 - kb) * cs)};
+}
+
+constexpr tYuvCoeffs kYuvCoeffs[3][2] = {
+    {MakeYuvCoeffs(0.299, 0.114, false), MakeYuvCoeffs(0.299, 0.114, true)},
+    {MakeYuvCoeffs(0.2126, 0.0722, false), MakeYuvCoeffs(0.2126, 0.0722, true)},
+    {MakeYuvCoeffs(0.2627, 0.0593, false), MakeYuvCoeffs(0.2627, 0.0593, true)},
+};
+
+const tYuvCoeffs& SelectYuvCoeffs(const tTVPMovieFrame& frame)
+{
+    int matrix = static_cast<int>(frame.colorMatrix);
+    if (matrix < 0 || matrix > 2)
+        matrix = 0;
+    return kYuvCoeffs[matrix][frame.fullRange ? 1 : 0];
+}
 
 inline void StoreRGB(uint8_t* dst,
                      bool packed,
@@ -128,6 +161,9 @@ bool ConvertYuvToRGBA(const tTVPMovieFrame& frame, uint8_t* dst, int dstPitch)
             return false;
     }
 
+    const tYuvCoeffs& k = SelectYuvCoeffs(frame);
+    constexpr int kRound = 1 << (kYuvShift - 1);
+
     for (int y = 0; y < height; ++y)
     {
         const uint8_t* yRow = yPlane + static_cast<ptrdiff_t>(y) * yStride;
@@ -161,13 +197,13 @@ bool ConvertYuvToRGBA(const tTVPMovieFrame& frame, uint8_t* dst, int dstPitch)
                 vValue = vPlane[static_cast<ptrdiff_t>(chromaY) * vStride + chromaX];
             }
 
-            const int c = yRow[x] - kBT601.yOffset;
+            const int c = (yRow[x] - k.yOffset) * k.yScale;
             const int d = uValue - 128;
             const int e = vValue - 128;
 
-            const int r = (c * 298 + e * kBT601.rv + 128) >> kBT601.shift;
-            const int g = (c * 298 + d * kBT601.gu + e * kBT601.gv + 128) >> kBT601.shift;
-            const int b = (c * 298 + d * kBT601.bu + 128) >> kBT601.shift;
+            const int r = (c + e * k.rv + kRound) >> kYuvShift;
+            const int g = (c + d * k.gu + e * k.gv + kRound) >> kYuvShift;
+            const int b = (c + d * k.bu + kRound) >> kYuvShift;
 
             StoreRGB(dstRow + x * 4, true, tTVPPixelFormat::RGBA, Clamp8(r), Clamp8(g),
                      Clamp8(b));

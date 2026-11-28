@@ -62,6 +62,21 @@ enum class tTVPPixelFormat : int
     Gray8,
 };
 
+// Mikage (GPL-3.0-or-later): YCbCr matrix of a video frame.
+enum class tTVPColorMatrix : int
+{
+    BT601 = 0,
+    BT709,
+    BT2020,
+};
+
+// Untagged video: BT.601 up to 576 lines, BT.709 above (same rule as SDL's
+// automatic YUV conversion mode and most players).
+inline tTVPColorMatrix TVPGuessColorMatrix(int height)
+{
+    return height > 576 ? tTVPColorMatrix::BT709 : tTVPColorMatrix::BT601;
+}
+
 // 打包格式每像素字节数；平面格式返回 0。
 inline int TVPPixelBytes(tTVPPixelFormat format)
 {

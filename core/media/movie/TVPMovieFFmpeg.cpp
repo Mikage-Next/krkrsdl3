@@ -6,8 +6,10 @@ extern "C"
 {
 #include "libavcodec/avcodec.h"
 #include "libavformat/avformat.h"
+#include "libavutil/hwcontext.h"
 #include "libavutil/imgutils.h"
 #include "libavutil/opt.h"
+#include "libavutil/pixdesc.h"
 #include "libswresample/swresample.h"
 #include "libswscale/swscale.h"
 }
@@ -75,12 +77,6 @@ tTVPPixelFormat FromAVPixelFormat(int avFormat)
 }
 
 // 超出映射表的格式一律按 YUV420P 处理，与旧实现保持一致的兜底行为。
-tTVPPixelFormat FromAVPixelFormatOrDefault(int avFormat)
-{
-    const tTVPPixelFormat format = FromAVPixelFormat(avFormat);
-    return format == tTVPPixelFormat::Unknown ? tTVPPixelFormat::YUV420P : format;
-}
-
 int ToAVPixelFormat(tTVPPixelFormat format)
 {
     switch (format)
@@ -134,6 +130,54 @@ double ToMilliseconds(int64_t timestamp, AVRational timeBase)
     if (timestamp == AV_NOPTS_VALUE)
         return TVPMovieNoTime;
     return double(timestamp) * av_q2d(timeBase) * TVPMovieMsPerSecond;
+}
+
+// Mikage (GPL-3.0-or-later): colour description of a decoded frame.
+tTVPColorMatrix FromAVColorSpace(AVColorSpace space, int height)
+{
+    switch (space)
+    {
+        case AVCOL_SPC_BT709:
+            return tTVPColorMatrix::BT709;
+        case AVCOL_SPC_BT2020_NCL:
+        case AVCOL_SPC_BT2020_CL:
+            return tTVPColorMatrix::BT2020;
+        case AVCOL_SPC_BT470BG:
+        case AVCOL_SPC_SMPTE170M:
+        case AVCOL_SPC_SMPTE240M:
+        case AVCOL_SPC_FCC:
+            return tTVPColorMatrix::BT601;
+        default:
+            return TVPGuessColorMatrix(height);
+    }
+}
+
+bool IsFullRangeFrame(const AVFrame* frame)
+{
+    if (frame->color_range == AVCOL_RANGE_JPEG)
+        return true;
+    switch (static_cast<AVPixelFormat>(frame->format))
+    {
+        case AV_PIX_FMT_YUVJ420P:
+        case AV_PIX_FMT_YUVJ422P:
+        case AV_PIX_FMT_YUVJ444P:
+            return true;
+        default:
+            return false;
+    }
+}
+
+int ToSwsColorSpace(tTVPColorMatrix matrix)
+{
+    switch (matrix)
+    {
+        case tTVPColorMatrix::BT709:
+            return SWS_CS_ITU709;
+        case tTVPColorMatrix::BT2020:
+            return SWS_CS_BT2020;
+        default:
+            return SWS_CS_ITU601;
+    }
 }
 
 // 容器的显示宽高比判定：matroska 信任容器，其余优先用编码参数。
@@ -227,17 +271,25 @@ SwsContext* gSws = nullptr;
 int gSwsWidth = 0;
 int gSwsHeight = 0;
 int gSwsFormat = -1;
+int gSwsColorSpace = -1;
+int gSwsFullRange = -1;
 
 bool SwsConvertToRGBA(const tTVPMovieFrame& frame, uint8_t* dst, int dstPitch)
 {
-    const int sourceFormat = ToAVPixelFormat(frame.format);
+    // Mikage (GPL-3.0-or-later): prefer the decoder's own format, so formats
+    // without a neutral tTVPPixelFormat (P010, 10-bit YUV) still convert.
+    const int sourceFormat =
+        frame.nativeFormat >= 0 ? frame.nativeFormat : ToAVPixelFormat(frame.format);
     if (sourceFormat == AV_PIX_FMT_NONE || frame.width <= 0 || frame.height <= 0)
         return false;
 
     tTJSCriticalSectionHolder lock(gSwsLock);
 
-    if (gSws == nullptr || gSwsWidth != frame.width || gSwsHeight != frame.height ||
-        gSwsFormat != sourceFormat)
+    const int colorSpace = ToSwsColorSpace(frame.colorMatrix);
+    const int fullRange = frame.fullRange ? 1 : 0;
+    const bool rebuilt = gSws == nullptr || gSwsWidth != frame.width ||
+                         gSwsHeight != frame.height || gSwsFormat != sourceFormat;
+    if (rebuilt)
     {
         if (gSws)
             sws_freeContext(gSws);
@@ -247,8 +299,20 @@ bool SwsConvertToRGBA(const tTVPMovieFrame& frame, uint8_t* dst, int dstPitch)
         gSwsWidth = frame.width;
         gSwsHeight = frame.height;
         gSwsFormat = sourceFormat;
+        gSwsColorSpace = -1;
         if (gSws == nullptr)
             return false;
+    }
+
+    // Mikage (GPL-3.0-or-later): sws defaults to BT.601 limited range for
+    // everything; describe the real matrix and range of the frame.
+    if (gSwsColorSpace != colorSpace || gSwsFullRange != fullRange)
+    {
+        const int* table = sws_getCoefficients(colorSpace);
+        sws_setColorspaceDetails(gSws, table, fullRange, sws_getCoefficients(SWS_CS_DEFAULT), 1,
+                                 0, 1 << 16, 1 << 16);
+        gSwsColorSpace = colorSpace;
+        gSwsFullRange = fullRange;
     }
 
     uint8_t* destination[4] = {dst, nullptr, nullptr, nullptr};
@@ -556,8 +620,16 @@ public:
     void SetDropState(bool drop) override;
 
 private:
+    // Mikage (GPL-3.0-or-later): VideoToolbox hardware decoding.
+    void OpenHardwareDevice(const AVCodec* codec);
+    const AVFrame* SoftwarePicture();
+    static AVPixelFormat PickFormat(AVCodecContext* context, const AVPixelFormat* formats);
+
     AVCodecContext* context_ = nullptr;
     AVFrame* picture_ = nullptr;
+    AVFrame* mapped_ = nullptr; // Mikage: CPU view of a hardware frame
+    AVBufferRef* hwDevice_ = nullptr;
+    bool loggedPath_ = false;
     AVRational timeBase_{1, 1000}; // 缺省按毫秒解释，与解复用器给的时间戳对齐
     double pendingPts_ = TVPMovieNoTime;
     double pendingDuration_ = 0.0;
@@ -583,6 +655,7 @@ bool tTVPMovieFFmpegVideoDecoder::Open(const tTVPMovieStream& stream)
     context_->workaround_bugs = FF_BUG_AUTODETECT;
     // 并行度由模块统一决定：wasm 上必须是 1。
     context_->thread_count = TVPMovieThreadBudget();
+    OpenHardwareDevice(codec);
 
     if (!stream.extradata.empty())
     {
@@ -604,7 +677,8 @@ bool tTVPMovieFFmpegVideoDecoder::Open(const tTVPMovieStream& stream)
     }
 
     picture_ = av_frame_alloc();
-    if (picture_ == nullptr)
+    mapped_ = av_frame_alloc();
+    if (picture_ == nullptr || mapped_ == nullptr)
     {
         Close();
         return false;
@@ -618,10 +692,90 @@ bool tTVPMovieFFmpegVideoDecoder::Open(const tTVPMovieStream& stream)
 
 void tTVPMovieFFmpegVideoDecoder::Close()
 {
+    if (mapped_)
+        av_frame_free(&mapped_);
     if (picture_)
         av_frame_free(&picture_);
     if (context_)
         avcodec_free_context(&context_);
+    if (hwDevice_)
+        av_buffer_unref(&hwDevice_);
+    loggedPath_ = false;
+}
+
+// Mikage (GPL-3.0-or-later): decode H.264/HEVC/VP9 with VideoToolbox where
+// the FFmpeg build has the hwaccel. Software decoding stays the fallback:
+// PickFormat returns a software format whenever VideoToolbox is not offered
+// (unsupported profile, device without the decoder), and FFmpeg itself falls
+// back if the hardware session fails to start.
+void tTVPMovieFFmpegVideoDecoder::OpenHardwareDevice(const AVCodec* codec)
+{
+#if defined(__APPLE__)
+    switch (codec->id)
+    {
+        case AV_CODEC_ID_H264:
+        case AV_CODEC_ID_HEVC:
+        case AV_CODEC_ID_VP9:
+            break;
+        default:
+            return;
+    }
+    if (av_hwdevice_ctx_create(&hwDevice_, AV_HWDEVICE_TYPE_VIDEOTOOLBOX, nullptr, nullptr, 0) <
+        0)
+    {
+        hwDevice_ = nullptr;
+        return;
+    }
+    context_->hw_device_ctx = av_buffer_ref(hwDevice_);
+    context_->get_format = &tTVPMovieFFmpegVideoDecoder::PickFormat;
+#else
+    (void)codec;
+#endif
+}
+
+AVPixelFormat tTVPMovieFFmpegVideoDecoder::PickFormat(AVCodecContext* context,
+                                                      const AVPixelFormat* formats)
+{
+    (void)context;
+    for (const AVPixelFormat* format = formats; *format != AV_PIX_FMT_NONE; ++format)
+        if (*format == AV_PIX_FMT_VIDEOTOOLBOX)
+            return *format;
+    for (const AVPixelFormat* format = formats; *format != AV_PIX_FMT_NONE; ++format)
+    {
+        const AVPixFmtDescriptor* descriptor = av_pix_fmt_desc_get(*format);
+        if (descriptor && !(descriptor->flags & AV_PIX_FMT_FLAG_HWACCEL))
+            return *format;
+    }
+    return AV_PIX_FMT_NONE;
+}
+
+// A hardware frame is mapped for reading (no copy; the CVPixelBuffer stays
+// locked until the next Receive), or copied out if mapping is refused.
+const AVFrame* tTVPMovieFFmpegVideoDecoder::SoftwarePicture()
+{
+    const AVPixFmtDescriptor* descriptor =
+        av_pix_fmt_desc_get(static_cast<AVPixelFormat>(picture_->format));
+    const bool hardware = descriptor && (descriptor->flags & AV_PIX_FMT_FLAG_HWACCEL);
+    if (!loggedPath_)
+    {
+        loggedPath_ = true;
+        TVPConsoleLog(TJS_N("movie: %s decoding (%s)"), hardware ? "hardware" : "software",
+                      context_->codec ? context_->codec->name : "?");
+    }
+    if (!hardware)
+        return picture_;
+
+    if (av_hwframe_map(mapped_, picture_, AV_HWFRAME_MAP_READ) < 0)
+    {
+        av_frame_unref(mapped_);
+        if (av_hwframe_transfer_data(mapped_, picture_, 0) < 0)
+        {
+            av_frame_unref(mapped_);
+            return nullptr;
+        }
+    }
+    av_frame_copy_props(mapped_, picture_);
+    return mapped_;
 }
 
 bool tTVPMovieFFmpegVideoDecoder::Feed(const tTVPMoviePacket& packet)
@@ -656,21 +810,47 @@ bool tTVPMovieFFmpegVideoDecoder::Receive(tTVPMovieFrame& frame)
     if (context_ == nullptr || picture_ == nullptr)
         return false;
 
+    // The mapped view references picture_, so release it first.
+    av_frame_unref(mapped_);
     av_frame_unref(picture_);
 
     const int result = avcodec_receive_frame(context_, picture_);
     if (result < 0)
         return false;
 
+    const AVFrame* pixels = SoftwarePicture();
+    if (pixels == nullptr)
+        return false;
+
     frame.kind = tTVPMovieFrame::tKind::Video;
-    frame.format = FromAVPixelFormatOrDefault(picture_->format);
+    // Mikage (GPL-3.0-or-later): keep the real format for sws and label only
+    // the formats the built-in converter understands. Unknown formats used to
+    // be labelled YUV420P, which drew 10-bit video as noise without sws.
+    frame.format = FromAVPixelFormat(pixels->format);
+    switch (static_cast<AVPixelFormat>(pixels->format))
+    {
+        case AV_PIX_FMT_YUVJ420P:
+            frame.nativeFormat = AV_PIX_FMT_YUV420P;
+            break;
+        case AV_PIX_FMT_YUVJ422P:
+            frame.nativeFormat = AV_PIX_FMT_YUV422P;
+            break;
+        case AV_PIX_FMT_YUVJ444P:
+            frame.nativeFormat = AV_PIX_FMT_YUV444P;
+            break;
+        default:
+            frame.nativeFormat = pixels->format;
+            break;
+    }
+    frame.colorMatrix = FromAVColorSpace(picture_->colorspace, picture_->height);
+    frame.fullRange = IsFullRangeFrame(picture_);
     for (int i = 0; i < 4; ++i)
     {
-        frame.planes[i] = picture_->data[i];
-        frame.strides[i] = picture_->linesize[i];
+        frame.planes[i] = pixels->data[i];
+        frame.strides[i] = pixels->linesize[i];
     }
-    frame.width = picture_->width;
-    frame.height = picture_->height;
+    frame.width = pixels->width;
+    frame.height = pixels->height;
 
     // 显示尺寸：按像素宽高比补齐，与旧实现一致。
     AVRational pixelAspect = picture_->sample_aspect_ratio;
